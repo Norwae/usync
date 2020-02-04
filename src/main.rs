@@ -1,12 +1,15 @@
+use std::path::Path;
+use std::io::Error;
+use std::process::exit;
 
 
 mod config;
 mod tree;
 
 
-fn main() {
-    let cfg = config::configure();
-    let hash = tree::FileEntry::new(cfg.source.as_str());
-    println!("Hello, world! You called me with {:#?}", cfg);
-    println!("Hashing {}: {:?}", cfg.source, hash);
+fn main() -> Result<(), Error>{
+    let cfg = config::configure()?;
+    let src = cfg.source.canonicalize()?;
+    tree::DirectoryEntry::new(src, cfg.verbose)?;
+    Ok(())
 }
