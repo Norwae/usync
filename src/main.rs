@@ -1,6 +1,5 @@
-use std::path::Path;
 use std::io::Error;
-use std::process::exit;
+use crate::config::ManifestMode;
 
 
 mod config;
@@ -8,8 +7,8 @@ mod tree;
 
 
 fn main() -> Result<(), Error>{
-    let cfg = config::configure()?;
+    let cfg = config::config()?;
     let src = cfg.source.canonicalize()?;
-    tree::DirectoryEntry::new(src, cfg.verbose)?;
+    tree::DirectoryEntry::new(src)?;
     Ok(())
 }
