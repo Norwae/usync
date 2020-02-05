@@ -18,31 +18,8 @@ pub struct Configuration {
     pub(crate) manifest_mode: ManifestMode,
 }
 
-static INIT: Once = Once::new();
-static mut CONFIG: Option<Result<Configuration, Error>> = None;
 
-pub fn config() -> Result<&'static Configuration, Error> {
-    INIT.call_once(|| {
-        unsafe {
-            CONFIG = Some(configure())
-        }
-    });
-
-    unsafe {
-        match &CONFIG {
-            None => Err(Error::new(ErrorKind::Other, "Configuration failed")),
-            Some(Err(e)) => {
-                let err: Error = Error::from(e.kind());
-                Err(err)
-            },
-            Some(Ok(cfg)) => {
-                Ok(cfg)
-            },
-        }
-    }
-}
-
-fn configure() -> Result<Configuration, Error> {
+pub fn configure() -> Result<Configuration, Error> {
     let args = App::new("usync")
         .version("1.0")
         .author("Elisabeth 'TerraNova' Schulz")

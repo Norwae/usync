@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::SystemTime;
 
 use ring::digest::{Context, SHA256};
-use crate::config::{config, ManifestMode};
+use crate::config::{ManifestMode, Configuration};
 
 type ShaSum = [u8; 32];
 
@@ -19,9 +19,8 @@ pub struct FileEntry {
 
 
 impl FileEntry {
-    pub fn new<S: AsRef<OsStr>>(path: S) -> Result<FileEntry, Error> {
+    pub fn new<S: AsRef<OsStr>>(path: S, config: &Configuration) -> Result<FileEntry, Error> {
         let path = Path::new(&path);
-        let config = config()?;
 
         let hash_value = if config.manifest_mode == ManifestMode::Hash {
             unsafe {
@@ -61,10 +60,9 @@ pub struct DirectoryEntry {
 }
 
 impl DirectoryEntry {
-    pub fn new<S: AsRef<OsStr>>(path: S) -> Result<DirectoryEntry, Error> {
+    pub fn new<S: AsRef<OsStr>>(path: S, config: &Configuration) -> Result<DirectoryEntry, Error> {
         let path = Path::new(&path);
         let dir = read_dir(path)?;
-        let config = config()?;
         let mut subdirs: Vec<DirectoryEntry> = Vec::new();
         let mut files: Vec<FileEntry> = Vec::new();
         let mut hash_input: Vec<u8> = Vec::new();
@@ -76,23 +74,18 @@ impl DirectoryEntry {
             let sub_path = path.join(entry.file_name());
 
             if entry.metadata()?.is_dir() {
-                let subtree = DirectoryEntry::new(sub_path)?;
-                let hc = subtree.hash_value;
-                let name = String::from(&subtree.name);
+                let subtree = DirectoryEntry::new(sub_path, config)?;
+                hash_input.extend(subtree.name.as_bytes());
+                hash_input.extend(&subtree.hash_value);
                 subdirs.push(subtree);
-                hash_input.append(&mut name.as_bytes().to_vec());
-                hash_input.append(&mut hc.to_vec());
             } else {
-                let file = FileEntry::new(sub_path)?;
-                let hc = file.hash_value;
-                let name = String::from(&file.name);
-                hash_input.append(&mut name.as_bytes().to_vec());
-                hash_input.append(&mut file.file_size.to_le_bytes().to_vec());
-                hash_input.append(&mut hc.to_vec());
+                let file = FileEntry::new(sub_path, config)?;
+                hash_input.extend(file.name.as_bytes());
+                hash_input.extend(&file.file_size.to_le_bytes());
+                hash_input.extend(&file.hash_value);
                 files.push(file);
             }
         }
-
 
         let hash_value = hash(hash_input.as_ref())?;
 
