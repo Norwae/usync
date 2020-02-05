@@ -1,7 +1,7 @@
 use std::ffi::OsStr;
 use std::fs::{File, read_dir};
 use std::io::{Error, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use ring::digest::{Context, SHA256};
@@ -9,22 +9,33 @@ use crate::config::{ManifestMode, Configuration};
 
 type ShaSum = [u8; 32];
 
+pub(crate) trait Named {
+    fn name(&self) -> &String;
+}
+
 #[derive(Debug)]
 pub struct FileEntry {
-    name: String,
-    modification_time: SystemTime,
-    file_size: u64,
-    hash_value: ShaSum,
+    pub(crate) name: String,
+    pub(crate) modification_time: SystemTime,
+    pub(crate) file_size: u64,
+    pub(crate) hash_value: ShaSum,
+    pub(crate) path: PathBuf
+}
+
+impl Named for FileEntry {
+    fn name(&self) -> &String {
+        &self.name
+    }
 }
 
 
 impl FileEntry {
     pub fn new<S: AsRef<OsStr>>(path: S, config: &Configuration) -> Result<FileEntry, Error> {
-        let path = Path::new(&path);
+        let path = PathBuf::from(&path);
 
         let hash_value = if config.manifest_mode == ManifestMode::Hash {
             unsafe {
-                let file = File::open(path)?;
+                let file = File::open(path.as_path())?;
                 let mmap = memmap2::Mmap::map(&file)?;
                 hash(mmap.as_ref())?
             }
@@ -46,20 +57,37 @@ impl FileEntry {
             modification_time,
             file_size,
             hash_value,
+            path
         })
     }
 }
 
 #[derive(Debug)]
 pub struct DirectoryEntry {
-    name: String,
-    modification_time: SystemTime,
-    subdirs: Vec<DirectoryEntry>,
-    files: Vec<FileEntry>,
-    hash_value: ShaSum,
+    pub(crate) name: String,
+    pub(crate) modification_time: SystemTime,
+    pub(crate) subdirs: Vec<DirectoryEntry>,
+    pub(crate) files: Vec<FileEntry>,
+    pub(crate) hash_value: ShaSum,
+}
+
+impl Named for DirectoryEntry {
+    fn name(&self) -> &String {
+        &self.name
+    }
 }
 
 impl DirectoryEntry {
+    pub fn empty<S: AsRef<OsStr>>(path: S) -> DirectoryEntry {
+        DirectoryEntry {
+            name: filename_to_string(Path::new(&path).file_name()),
+            modification_time: SystemTime::now(),
+            subdirs: Vec::new(),
+            files: Vec::new(),
+            hash_value: hash(&[]).unwrap()
+        }
+    }
+
     pub fn new<S: AsRef<OsStr>>(path: S, config: &Configuration) -> Result<DirectoryEntry, Error> {
         let path = Path::new(&path);
         let dir = read_dir(path)?;
