@@ -9,16 +9,16 @@ use serde::{Serialize, Deserialize};
 
 use crate::config::{ManifestMode, Configuration};
 use crate::util::{Named, find_named};
-use std::path::Prefix::Disk;
+
 
 type ShaSum = [u8; 32];
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct FileEntry {
-    pub(crate) name: String,
-    pub(crate) modification_time: SystemTime,
-    pub(crate) file_size: u64,
-    pub(crate) hash_value: ShaSum,
+struct FileEntry {
+    name: String,
+    modification_time: SystemTime,
+    file_size: u64,
+    hash_value: ShaSum,
 }
 
 impl Named for FileEntry {
@@ -40,20 +40,18 @@ impl FileEntry {
         } else {
             [0u8; 32]
         };
-        let metadata = path.metadata()?;
-        let modification_time = metadata.modified()?;
-        let file_size = metadata.len();
 
+        let metadata = path.metadata()?;
         let name = filename_to_string(path.file_name());
 
         if config.verbose {
-            println!("Hashed file {} into {}", path.display(), hex::encode(&hash_value))
+            println!("Hashed file {} into {}", path.to_string_lossy(), hex::encode(&hash_value))
         }
 
         Ok(FileEntry {
             name,
-            modification_time,
-            file_size,
+            modification_time: metadata.modified()?,
+            file_size: metadata.len(),
             hash_value,
         })
     }
@@ -67,8 +65,9 @@ struct DirectoryEntry {
     files: Vec<FileEntry>,
     hash_value: ShaSum,
 }
+
 impl DirectoryEntry {
-    fn validate0(&self, path: &Path) -> Result<bool> {
+    fn validate0(&self, path: &Path, cfg: &Configuration) -> Result<bool> {
         if !path.exists() {
             return Ok(false);
         }
@@ -80,19 +79,23 @@ impl DirectoryEntry {
             return Ok(false);
         }
 
-        let mut count = 0usize;
+        let mut examined_count = 0usize;
         for entry in path.read_dir()? {
-            count += 1;
             let entry = entry?;
             let name = entry.file_name();
             let sub_path = path.join(&name);
 
+            if cfg.is_excluded(sub_path.as_path()) {
+                continue;
+            }
+
+            examined_count += 1;
             if entry.metadata()?.is_dir() {
                 let found = find_named(self.subdirs.as_slice(), name.to_string_lossy());
                 match found {
                     None => return Ok(false),
                     Some(o) => {
-                        if !o.validate(sub_path) {
+                        if !o.validate(sub_path, cfg) {
                             return Ok(false);
                         }
                     }
@@ -113,13 +116,18 @@ impl DirectoryEntry {
                 }
             }
         }
-        let count_match = count == (self.subdirs.len() + self.files.len());
+        let count_match = examined_count == (self.subdirs.len() + self.files.len());
+
         Ok(count_match)
     }
 
 
-    fn validate<S: AsRef<OsStr>>(&self, path: S) -> bool {
-        self.validate0(Path::new(path.as_ref())).unwrap_or(false)
+    fn validate<S: AsRef<OsStr>>(&self, path: S, cfg: &Configuration) -> bool {
+        self.validate0(Path::new(path.as_ref()), cfg).unwrap_or(false)
+    }
+
+    fn copy_from(&self, source: &DirectoryEntry, cfg: &Configuration)-> Result<()> {
+        Ok(())
     }
 
     pub fn empty<S: AsRef<OsStr>>(path: S) -> DirectoryEntry {
@@ -145,6 +153,13 @@ impl DirectoryEntry {
             let entry = entry?;
             let sub_path = path.join(entry.file_name());
 
+            if config.is_excluded(sub_path.as_path()) {
+                if config.verbose {
+                    println!("Excluding file {}", sub_path.to_string_lossy())
+                }
+                continue;
+            }
+
             if entry.metadata()?.is_dir() {
                 let subtree = DirectoryEntry::new(sub_path, config)?;
                 hash_input.extend(subtree.name.as_bytes());
@@ -162,7 +177,7 @@ impl DirectoryEntry {
         let hash_value = hash(hash_input.as_ref())?;
 
         if config.verbose {
-            println!("Hashed directory {} into {}", path.display(), hex::encode(&hash_value))
+            println!("Hashed directory {} into {}", path.to_string_lossy(), hex::encode(&hash_value))
         }
 
         Ok(DirectoryEntry {
@@ -185,18 +200,6 @@ impl Named for DirectoryEntry {
 pub struct Manifest(DirectoryEntry);
 
 impl Manifest {
-    fn manifest_file(root: &OsStr, cfg: &Configuration) -> PathBuf {
-        let mut manifest_path = PathBuf::new();
-        if cfg.manifest_path.is_absolute() {
-            manifest_path.push(&cfg.manifest_path);
-        } else {
-            manifest_path.push(root);
-            manifest_path.push(&cfg.manifest_path);
-        }
-
-        manifest_path
-    }
-
     pub fn create_ephemeral<S: AsRef<OsStr>>(root: S, cfg: &Configuration) -> Result<Manifest> {
         let de = DirectoryEntry::new(root, cfg)?;
 
@@ -204,16 +207,17 @@ impl Manifest {
     }
 
     pub fn create_persistent<S: AsRef<OsStr>>(root: S, cfg: &Configuration) -> Result<Manifest> {
-        let manifest_path = Manifest::manifest_file(root.as_ref(), cfg);
+        let manifest_path = manifest_file(root.as_ref(), &cfg);
+        let mut cfg = cfg.with_additional_exclusion(manifest_path.as_path());
 
         if cfg.verbose {
             println!("Resolved manifest path to {}", manifest_path.as_path().to_string_lossy());
         }
 
-        let mut res = Manifest::_load(manifest_path.as_path(), cfg);
+        let mut res = Manifest::_load(manifest_path.as_path(), &cfg);
         if res.is_ok() {
             let m = res.as_ref().unwrap();
-            if !m.0.validate(root.as_ref()) {
+            if !m.0.validate(root.as_ref(), &cfg) {
                 res = Err(Error::new(ErrorKind::Other, "Manifest validation failed"))
             }
         }
@@ -222,19 +226,26 @@ impl Manifest {
             if cfg.verbose {
                 println!("Manifest file not usable: {}", e)
             }
-            let de = DirectoryEntry::new(root, cfg);
+            let de = DirectoryEntry::new(root.as_ref(), &cfg);
             de.and_then(|e| {
                 let manifest = Manifest(e);
 
-                manifest.save(manifest_path, cfg)?;
+                manifest.save(root.as_ref(), &cfg)?;
 
                 Ok(manifest)
             })
         })
     }
 
+    pub fn copy_from(&self, source: &Manifest, cfg: &Configuration) -> Result<()> {
+        self.0.copy_from(&source.0, cfg)?;
+
+        Ok(())
+    }
+
     pub fn save<S: AsRef<OsStr>>(&self, root: S, cfg: &Configuration) -> Result<()> {
-        let manifest_path = Manifest::manifest_file(root.as_ref(), cfg);
+        let manifest_path = manifest_file(root.as_ref(), cfg);
+        println!("Opening file {} for saving manifest", manifest_path.to_string_lossy());
         let file = File::create(manifest_path.as_path())?;
         let r = bincode::serialize_into(file, self);
         r.map_err(|e2| Error::new(ErrorKind::Other, e2))?;
@@ -266,5 +277,17 @@ fn hash(input: &[u8]) -> Result<ShaSum> {
 }
 
 fn filename_to_string(filename: Option<&OsStr>) -> String {
-    String::from(filename.unwrap().to_str().unwrap())
+    String::from(filename.unwrap().to_string_lossy())
+}
+
+fn manifest_file(root: &OsStr, cfg: &Configuration) -> PathBuf {
+    let mut manifest_path = PathBuf::new();
+    if cfg.manifest_path.is_absolute() {
+        manifest_path.push(&cfg.manifest_path);
+    } else {
+        manifest_path.push(root);
+        manifest_path.push(&cfg.manifest_path);
+    }
+
+    manifest_path
 }

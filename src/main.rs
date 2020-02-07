@@ -1,14 +1,9 @@
 use std::io::Error;
-use crate::tree::DirectoryEntry;
-use std::path::{Path, PathBuf};
-use std::fs::create_dir;
-use crate::config::Configuration;
-use crate::util::find_named_mut;
 
 mod config;
 mod tree;
 mod util;
-
+/*
 
 fn copy_file<P: AsRef<Path>>(target: P, source: P) -> Result<u64, Error> {
     std::fs::copy(source, target)
@@ -63,7 +58,7 @@ fn copy(target_dir: &Path, source_dir: &Path, target: &mut DirectoryEntry, sourc
 
     Ok(())
 }
-
+*/
 fn main() -> Result<(), Error> {
     let cfg = config::configure()?;
     let src = cfg.source.canonicalize()?;
@@ -71,11 +66,11 @@ fn main() -> Result<(), Error> {
 
     let dst = cfg.target.canonicalize()?;
     let mut dst_manifest = tree::Manifest::create_ephemeral(dst.as_path(), &cfg)?;
-    copy(dst.as_path(),
+    /*copy(dst.as_path(),
          src.as_path(),
          &mut dst_manifest,
          &src_manifest.0,
          &cfg)?;
-
+*/
     Ok(())
 }
