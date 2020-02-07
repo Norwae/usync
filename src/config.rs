@@ -1,7 +1,6 @@
 use clap::{App, Arg};
 use std::path::{PathBuf, Path};
 use std::io::{Error, ErrorKind};
-use std::sync::Once;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ManifestMode {
@@ -15,7 +14,7 @@ pub struct Configuration {
     pub(crate) target: PathBuf,
     pub(crate) verbose: bool,
     pub(crate) force_rebuild_manifest: bool,
-    pub(crate) manifest_path: String,
+    pub(crate) manifest_path: PathBuf,
     pub(crate) manifest_mode: ManifestMode,
 }
 
@@ -48,7 +47,7 @@ pub fn configure() -> Result<Configuration, Error> {
                 .long("manifest-file")
                 .help("Stored manifest file (relative to source directory)")
                 .takes_value(true)
-                .default_value("./.usync.manifest")
+                .default_value(".usync.manifest")
         )
         .arg(Arg::with_name("hash-mode")
                 .help("hashing mode")
@@ -78,7 +77,7 @@ pub fn configure() -> Result<Configuration, Error> {
             target: trg.into(),
             verbose: args.is_present("verbose"),
             force_rebuild_manifest: args.is_present("rebuild manifest"),
-            manifest_path: args.value_of("manifest file").unwrap().to_string(),
+            manifest_path: Path::new(args.value_of("manifest file").unwrap()).into(),
             manifest_mode:  if args.value_of("hash-mode").unwrap() == "hash" {
                 ManifestMode::Hash
             } else {

@@ -12,3 +12,5 @@ clap = "2.31.2"
 ring = "0.16.9"
 hex = "0.4.0"
 memmap2 = "0.1.0"
+serde = {version = "1.0.104", features = ["derive"]}
+bincode = "1.2.1"

@@ -2,70 +2,82 @@ use std::io::Error;
 use crate::tree::{DirectoryEntry, Named};
 use std::path::{Path, PathBuf};
 use std::fs::create_dir;
+use crate::config::Configuration;
 
 mod config;
 mod tree;
 
-fn find_named<'a, T : Named>(all: &'a mut [T], name: &String) -> Option<&'a mut T> {
+fn find_named<'a, T: Named>(all: &'a mut [T], name: &String) -> Option<&'a mut T> {
     for candidate in all {
         if candidate.name() == name {
-            return Some(candidate)
+            return Some(candidate);
         }
     }
     None
 }
+
 fn copy_file<P: AsRef<Path>>(target: P, source: P) -> Result<u64, Error> {
     std::fs::copy(source, target)
 }
 
-fn copy(root: &Path, target: &mut DirectoryEntry, source: &DirectoryEntry) -> Result<(), Error> {
+fn push(base: &Path, name: &str) -> PathBuf {
+    let mut p = PathBuf::from(base);
+    p.push(name);
+    p
+}
+
+fn copy(cfg: &Configuration, target_dir: &Path, source_dir: &Path, target: &mut DirectoryEntry, source: &DirectoryEntry) -> Result<(), Error> {
     for dir in &source.subdirs {
-        let mut subdir = PathBuf::from(root);
-        subdir.push(&dir.name);
-        let subdir = subdir.as_path();
+        let target_subdir = push(target_dir, &dir.name);
+        let source_subdir = push(source_dir, &dir.name);
         let partner = find_named(&mut target.subdirs, &dir.name);
 
-        let partner= match partner {
+        let partner = match partner {
             None => {
-                create_dir(subdir)?;
-                target.subdirs.push(DirectoryEntry::empty(subdir));
+                create_dir(target_subdir.as_path())?;
+                target.subdirs.push(DirectoryEntry::empty(target_subdir.as_path()));
                 target.subdirs.last_mut().unwrap()
-            },
+            }
             Some(p) => p,
         };
 
         if partner.hash_value != dir.hash_value {
-            copy(subdir, partner, dir)?;
+            copy(cfg, target_subdir.as_path(), source_subdir.as_path(), partner, dir)?;
         }
     }
 
-    for srcFile in &source.files {
-        let mut file = PathBuf::from(root);
-        file.push(&srcFile.name);
-        let file = file.as_path();
-        let partner = find_named(&mut target.files, &srcFile.name);
+    for file in &source.files {
+        let target_file = push(target_dir, &file.name);
+        let source_file = push(source_dir, &file.name);
+        let partner = find_named(&mut target.files, &file.name);
 
         if partner.is_none() || {
             let partner = partner.unwrap();
-            partner.modification_time != srcFile.modification_time ||
-            partner.file_size != srcFile.file_size ||
-            partner.hash_value != srcFile.hash_value
+            partner.modification_time != file.modification_time ||
+                partner.file_size != file.file_size ||
+                partner.hash_value != file.hash_value
         } {
-            copy_file(file, srcFile.path.as_path())?;
+            if cfg.verbose {
+                println!("Copying file {} to {}", source_file.to_string_lossy(), target_file.to_string_lossy())
+            }
+            copy_file(target_file.as_path(), source_file.as_path())?;
         }
     }
 
     Ok(())
 }
 
-fn main() -> Result<(), Error>{
+fn main() -> Result<(), Error> {
     let cfg = config::configure()?;
     let src = cfg.source.canonicalize()?;
-    let src = tree::DirectoryEntry::new(src, &cfg)?;
+    let src_manifest = tree::Manifest::create(src.as_path(), &cfg)?;
     let dst = cfg.target.canonicalize()?;
-    let mut dst = tree::DirectoryEntry::new(dst, &cfg)?;
-
-    copy(cfg.target.as_path(), &mut dst, &src)?;
+    let mut dst_manifest = tree::DirectoryEntry::new(dst.as_path(), &cfg)?;
+    copy(&cfg,
+         dst.as_path(),
+         src.as_path(),
+         &mut dst_manifest,
+         &src_manifest.0)?;
 
 
     Ok(())

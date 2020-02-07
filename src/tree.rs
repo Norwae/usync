@@ -1,10 +1,12 @@
 use std::ffi::OsStr;
 use std::fs::{File, read_dir};
-use std::io::{Error, Read};
+use std::io::{Error, ErrorKind, Read, Result};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use ring::digest::{Context, SHA256};
+use serde::{Serialize, Deserialize};
+
 use crate::config::{ManifestMode, Configuration};
 
 type ShaSum = [u8; 32];
@@ -13,13 +15,12 @@ pub(crate) trait Named {
     fn name(&self) -> &String;
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct FileEntry {
     pub(crate) name: String,
     pub(crate) modification_time: SystemTime,
     pub(crate) file_size: u64,
     pub(crate) hash_value: ShaSum,
-    pub(crate) path: PathBuf
 }
 
 impl Named for FileEntry {
@@ -30,7 +31,7 @@ impl Named for FileEntry {
 
 
 impl FileEntry {
-    pub fn new<S: AsRef<OsStr>>(path: S, config: &Configuration) -> Result<FileEntry, Error> {
+    pub fn new<S: AsRef<OsStr>>(path: S, config: &Configuration) -> Result<FileEntry> {
         let path = PathBuf::from(&path);
 
         let hash_value = if config.manifest_mode == ManifestMode::Hash {
@@ -48,7 +49,7 @@ impl FileEntry {
 
         let name = filename_to_string(path.file_name());
 
-        if config.verbose  {
+        if config.verbose {
             println!("Hashed file {} into {}", path.display(), hex::encode(&hash_value))
         }
 
@@ -57,12 +58,11 @@ impl FileEntry {
             modification_time,
             file_size,
             hash_value,
-            path
         })
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct DirectoryEntry {
     pub(crate) name: String,
     pub(crate) modification_time: SystemTime,
@@ -77,6 +77,36 @@ impl Named for DirectoryEntry {
     }
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct Manifest(pub (crate) DirectoryEntry);
+
+impl Manifest {
+    pub fn create<S: AsRef<OsStr>>(root: S, cfg: &Configuration) -> Result<Manifest> {
+        let mut manifest_path = PathBuf::new();
+        if cfg.manifest_path.is_absolute() {
+            manifest_path.push(&cfg.manifest_path);
+        } else {
+            manifest_path.push(root.as_ref());
+            manifest_path.push(&cfg.manifest_path);
+        }
+
+        if cfg.verbose {
+            println!("Resolved manifest path to {}", manifest_path.as_path().to_string_lossy());
+        }
+
+        Manifest::load(manifest_path.as_path()).or_else(|_| {
+            let de = DirectoryEntry::new(root, cfg);
+            de.map(|e| Manifest(e))
+        })
+    }
+
+    pub fn load<S: AsRef<Path>>(file: S) -> Result<Manifest> {
+        let file = File::open(file)?;
+        let r= bincode::deserialize_from(file);
+        r.map_err(|e2| Error::new(ErrorKind::Other, e2))
+    }
+}
+
 impl DirectoryEntry {
     pub fn empty<S: AsRef<OsStr>>(path: S) -> DirectoryEntry {
         DirectoryEntry {
@@ -84,11 +114,11 @@ impl DirectoryEntry {
             modification_time: SystemTime::now(),
             subdirs: Vec::new(),
             files: Vec::new(),
-            hash_value: hash(&[]).unwrap()
+            hash_value: hash(&[]).unwrap(),
         }
     }
 
-    pub fn new<S: AsRef<OsStr>>(path: S, config: &Configuration) -> Result<DirectoryEntry, Error> {
+    pub fn new<S: AsRef<OsStr>>(path: S, config: &Configuration) -> Result<DirectoryEntry> {
         let path = Path::new(&path);
         let dir = read_dir(path)?;
         let mut subdirs: Vec<DirectoryEntry> = Vec::new();
@@ -131,7 +161,7 @@ impl DirectoryEntry {
     }
 }
 
-fn hash(input: &[u8]) -> Result<ShaSum, Error> {
+fn hash(input: &[u8]) -> Result<ShaSum> {
     let mut sha256 = Context::new(&SHA256);
     let mut rv: ShaSum = [0u8; 32];
     sha256.update(input);
