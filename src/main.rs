@@ -1,20 +1,14 @@
 use std::io::Error;
-use crate::tree::{DirectoryEntry, Named};
+use crate::tree::DirectoryEntry;
 use std::path::{Path, PathBuf};
 use std::fs::create_dir;
 use crate::config::Configuration;
+use crate::util::find_named_mut;
 
 mod config;
 mod tree;
+mod util;
 
-fn find_named<'a, T: Named>(all: &'a mut [T], name: &String) -> Option<&'a mut T> {
-    for candidate in all {
-        if candidate.name() == name {
-            return Some(candidate);
-        }
-    }
-    None
-}
 
 fn copy_file<P: AsRef<Path>>(target: P, source: P) -> Result<u64, Error> {
     std::fs::copy(source, target)
@@ -30,7 +24,7 @@ fn copy(target_dir: &Path, source_dir: &Path, target: &mut DirectoryEntry, sourc
     for dir in &source.subdirs {
         let target_subdir = push(target_dir, &dir.name);
         let source_subdir = push(source_dir, &dir.name);
-        let partner = find_named(&mut target.subdirs, &dir.name);
+        let partner = find_named_mut(&mut target.subdirs, &dir.name);
 
         let partner = match partner {
             None => {
@@ -52,7 +46,7 @@ fn copy(target_dir: &Path, source_dir: &Path, target: &mut DirectoryEntry, sourc
     for file in &source.files {
         let target_file = push(target_dir, &file.name);
         let source_file = push(source_dir, &file.name);
-        let partner = find_named(&mut target.files, &file.name);
+        let partner = find_named_mut(&mut target.files, &file.name);
 
         if partner.is_none() || {
             let partner = partner.unwrap();

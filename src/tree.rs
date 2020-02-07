@@ -8,12 +8,9 @@ use ring::digest::{Context, SHA256};
 use serde::{Serialize, Deserialize};
 
 use crate::config::{ManifestMode, Configuration};
+use crate::util::{Named, find_named};
 
 type ShaSum = [u8; 32];
-
-pub(crate) trait Named {
-    fn name(&self) -> &String;
-}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FileEntry {
@@ -24,7 +21,7 @@ pub struct FileEntry {
 }
 
 impl Named for FileEntry {
-    fn name(&self) -> &String {
+    fn name(&self) -> &str {
         &self.name
     }
 }
@@ -72,7 +69,7 @@ pub struct DirectoryEntry {
 }
 
 impl Named for DirectoryEntry {
-    fn name(&self) -> &String {
+    fn name(&self) -> &str {
         &self.name
     }
 }
@@ -100,13 +97,30 @@ impl Manifest {
             println!("Resolved manifest path to {}", manifest_path.as_path().to_string_lossy());
         }
 
-        Manifest::_load(manifest_path.as_path()).or_else(|e| {
-            if cfg.verbose {
-                println!("Manifest file not usable: {}", e)
+        let m = Manifest::_load(manifest_path.as_path(), cfg);
+
+        match m {
+            Ok(manifest) => {
+                if !manifest.0.validate(root.as_ref()) {
+                    if cfg.verbose {
+                        println!("Rebuilding manifest after validation failure");
+                    }
+
+                    let rebuild = DirectoryEntry::new(root, cfg)?;
+
+                    Ok(Manifest(rebuild))
+                } else {
+                    Ok(manifest)
+                }
             }
-            let de = DirectoryEntry::new(root, cfg);
-            de.map(|e| Manifest(e))
-        })
+            Err(e) => {
+                if cfg.verbose {
+                    println!("Manifest file not usable: {}", e)
+                }
+                let de = DirectoryEntry::new(root, cfg);
+                de.map(|e| Manifest(e))
+            }
+        }
     }
 
     pub fn save<S: AsRef<OsStr>>(&self, root: S, cfg: &Configuration) -> Result<()> {
@@ -122,14 +136,70 @@ impl Manifest {
         Ok(())
     }
 
-    fn _load<S: AsRef<Path>>(file: S) -> Result<Manifest> {
+    fn _load<S: AsRef<Path>>(file: S, cfg: &Configuration) -> Result<Manifest> {
+        if cfg.force_rebuild_manifest {
+            return Err(Error::new(ErrorKind::Other, "Forced rebuild of manifest"));
+        }
         let file = File::open(file)?;
-        let r= bincode::deserialize_from(file);
-        r.map_err(|e2| Error::new(ErrorKind::Other, e2))
+        bincode::deserialize_from(file)
+            .map_err(|e2| Error::new(ErrorKind::Other, e2))
     }
 }
 
 impl DirectoryEntry {
+    fn validate0(&self, path: &Path) -> Result<bool> {
+        if !path.exists() {
+            return Ok(false);
+        }
+
+        let meta = path.metadata()?;
+        let mtime = meta.modified()?;
+
+        if !meta.is_dir() || mtime != self.modification_time {
+            return Ok(false);
+        }
+
+        let mut count = 0usize;
+        for entry in path.read_dir()? {
+            count += 1;
+            let entry = entry?;
+            let name = entry.file_name();
+            let sub_path = path.join(&name);
+
+            if entry.metadata()?.is_dir() {
+                let found = find_named(self.subdirs.as_slice(), name.to_string_lossy());
+                match found {
+                    None => return Ok(false),
+                    Some(o) => {
+                        if !o.validate(sub_path) {
+                            return Ok(false)
+                        }
+                    },
+                }
+            } else {
+                let found = find_named(self.files.as_slice(), &name.to_string_lossy());
+                match found {
+                    None => return Ok(false),
+                    Some(o) => {
+                        let meta = sub_path.metadata()?;
+                        let mismatch =
+                            meta.modified()? != o.modification_time ||
+                                meta.len() != o.file_size;
+                        if mismatch {
+                            return Ok(false)
+                        }
+                    },
+                }
+            }
+        }
+        let count_match = count == (self.subdirs.len() + self.files.len());
+        Ok(count_match)   }
+
+
+    fn validate<S: AsRef<OsStr>>(&self, path: S) -> bool {
+        self.validate0(Path::new(path.as_ref())).unwrap_or(false)
+    }
+
     pub fn empty<S: AsRef<OsStr>>(path: S) -> DirectoryEntry {
         DirectoryEntry {
             name: filename_to_string(Path::new(&path).file_name()),
