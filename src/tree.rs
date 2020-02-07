@@ -9,6 +9,7 @@ use serde::{Serialize, Deserialize};
 
 use crate::config::{ManifestMode, Configuration};
 use crate::util::{Named, find_named};
+use std::path::Prefix::Disk;
 
 type ShaSum = [u8; 32];
 
@@ -25,7 +26,6 @@ impl Named for FileEntry {
         &self.name
     }
 }
-
 
 impl FileEntry {
     pub fn new<S: AsRef<OsStr>>(path: S, config: &Configuration) -> Result<FileEntry> {
@@ -60,89 +60,13 @@ impl FileEntry {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct DirectoryEntry {
-    pub(crate) name: String,
-    pub(crate) modification_time: SystemTime,
-    pub(crate) subdirs: Vec<DirectoryEntry>,
-    pub(crate) files: Vec<FileEntry>,
-    pub(crate) hash_value: ShaSum,
+struct DirectoryEntry {
+    name: String,
+    modification_time: SystemTime,
+    subdirs: Vec<DirectoryEntry>,
+    files: Vec<FileEntry>,
+    hash_value: ShaSum,
 }
-
-impl Named for DirectoryEntry {
-    fn name(&self) -> &str {
-        &self.name
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct Manifest(pub (crate) DirectoryEntry);
-
-impl Manifest {
-    fn manifest_file(root: &OsStr, cfg: &Configuration) -> PathBuf {
-        let mut manifest_path = PathBuf::new();
-        if cfg.manifest_path.is_absolute() {
-            manifest_path.push(&cfg.manifest_path);
-        } else {
-            manifest_path.push(root);
-            manifest_path.push(&cfg.manifest_path);
-        }
-
-        manifest_path
-    }
-
-    pub fn create<S: AsRef<OsStr>>(root: S, cfg: &Configuration) -> Result<Manifest> {
-        let manifest_path = Manifest::manifest_file(root.as_ref(), cfg);
-
-        if cfg.verbose {
-            println!("Resolved manifest path to {}", manifest_path.as_path().to_string_lossy());
-        }
-
-        let mut res = Manifest::_load(manifest_path.as_path(), cfg);
-        if res.is_ok() {
-            let m = res.as_ref().unwrap();
-            if !m.0.validate(root.as_ref()) {
-                res = Err(Error::new(ErrorKind::Other, "Manifest validation failed"))
-            }
-        }
-
-        res.or_else(|e| {
-            if cfg.verbose {
-                println!("Manifest file not usable: {}", e)
-            }
-            let de = DirectoryEntry::new(root, cfg);
-            de.and_then(|e| {
-                let manifest = Manifest(e);
-
-                manifest.save(manifest_path, cfg)?;
-
-                Ok(manifest)
-            })
-        })
-    }
-
-    pub fn save<S: AsRef<OsStr>>(&self, root: S, cfg: &Configuration) -> Result<()> {
-        let manifest_path = Manifest::manifest_file(root.as_ref(), cfg);
-        let file = File::create(manifest_path.as_path())?;
-        let r = bincode::serialize_into(file, self);
-        r.map_err(|e2| Error::new(ErrorKind::Other, e2))?;
-
-        if cfg.verbose {
-            println!("Saved manifest file to {}", manifest_path.to_string_lossy());
-        }
-
-        Ok(())
-    }
-
-    fn _load<S: AsRef<Path>>(file: S, cfg: &Configuration) -> Result<Manifest> {
-        if cfg.force_rebuild_manifest {
-            return Err(Error::new(ErrorKind::Other, "Forced rebuild of manifest"));
-        }
-        let file = File::open(file)?;
-        bincode::deserialize_from(file)
-            .map_err(|e2| Error::new(ErrorKind::Other, e2))
-    }
-}
-
 impl DirectoryEntry {
     fn validate0(&self, path: &Path) -> Result<bool> {
         if !path.exists() {
@@ -169,9 +93,9 @@ impl DirectoryEntry {
                     None => return Ok(false),
                     Some(o) => {
                         if !o.validate(sub_path) {
-                            return Ok(false)
+                            return Ok(false);
                         }
-                    },
+                    }
                 }
             } else {
                 let found = find_named(self.files.as_slice(), &name.to_string_lossy());
@@ -183,14 +107,15 @@ impl DirectoryEntry {
                             meta.modified()? != o.modification_time ||
                                 meta.len() != o.file_size;
                         if mismatch {
-                            return Ok(false)
+                            return Ok(false);
                         }
-                    },
+                    }
                 }
             }
         }
         let count_match = count == (self.subdirs.len() + self.files.len());
-        Ok(count_match)   }
+        Ok(count_match)
+    }
 
 
     fn validate<S: AsRef<OsStr>>(&self, path: S) -> bool {
@@ -249,6 +174,88 @@ impl DirectoryEntry {
         })
     }
 }
+
+impl Named for DirectoryEntry {
+    fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Manifest(DirectoryEntry);
+
+impl Manifest {
+    fn manifest_file(root: &OsStr, cfg: &Configuration) -> PathBuf {
+        let mut manifest_path = PathBuf::new();
+        if cfg.manifest_path.is_absolute() {
+            manifest_path.push(&cfg.manifest_path);
+        } else {
+            manifest_path.push(root);
+            manifest_path.push(&cfg.manifest_path);
+        }
+
+        manifest_path
+    }
+
+    pub fn create_ephemeral<S: AsRef<OsStr>>(root: S, cfg: &Configuration) -> Result<Manifest> {
+        let de = DirectoryEntry::new(root, cfg)?;
+
+        Ok(Manifest(de))
+    }
+
+    pub fn create_persistent<S: AsRef<OsStr>>(root: S, cfg: &Configuration) -> Result<Manifest> {
+        let manifest_path = Manifest::manifest_file(root.as_ref(), cfg);
+
+        if cfg.verbose {
+            println!("Resolved manifest path to {}", manifest_path.as_path().to_string_lossy());
+        }
+
+        let mut res = Manifest::_load(manifest_path.as_path(), cfg);
+        if res.is_ok() {
+            let m = res.as_ref().unwrap();
+            if !m.0.validate(root.as_ref()) {
+                res = Err(Error::new(ErrorKind::Other, "Manifest validation failed"))
+            }
+        }
+
+        res.or_else(|e| {
+            if cfg.verbose {
+                println!("Manifest file not usable: {}", e)
+            }
+            let de = DirectoryEntry::new(root, cfg);
+            de.and_then(|e| {
+                let manifest = Manifest(e);
+
+                manifest.save(manifest_path, cfg)?;
+
+                Ok(manifest)
+            })
+        })
+    }
+
+    pub fn save<S: AsRef<OsStr>>(&self, root: S, cfg: &Configuration) -> Result<()> {
+        let manifest_path = Manifest::manifest_file(root.as_ref(), cfg);
+        let file = File::create(manifest_path.as_path())?;
+        let r = bincode::serialize_into(file, self);
+        r.map_err(|e2| Error::new(ErrorKind::Other, e2))?;
+
+        if cfg.verbose {
+            println!("Saved manifest file to {}", manifest_path.to_string_lossy());
+        }
+
+        Ok(())
+    }
+
+    fn _load<S: AsRef<Path>>(file: S, cfg: &Configuration) -> Result<Manifest> {
+        if cfg.force_rebuild_manifest {
+            return Err(Error::new(ErrorKind::Other, "Forced rebuild of manifest"));
+        }
+        let file = File::open(file)?;
+        bincode::deserialize_from(file)
+            .map_err(|e2| Error::new(ErrorKind::Other, e2))
+    }
+}
+
 
 fn hash(input: &[u8]) -> Result<ShaSum> {
     let mut sha256 = Context::new(&SHA256);

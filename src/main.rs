@@ -67,10 +67,10 @@ fn copy(target_dir: &Path, source_dir: &Path, target: &mut DirectoryEntry, sourc
 fn main() -> Result<(), Error> {
     let cfg = config::configure()?;
     let src = cfg.source.canonicalize()?;
-    let src_manifest = tree::Manifest::create(src.as_path(), &cfg)?;
+    let src_manifest = tree::Manifest::create_persistent(src.as_path(), &cfg)?;
 
     let dst = cfg.target.canonicalize()?;
-    let mut dst_manifest = tree::DirectoryEntry::new(dst.as_path(), &cfg)?;
+    let mut dst_manifest = tree::Manifest::create_ephemeral(dst.as_path(), &cfg)?;
     copy(dst.as_path(),
          src.as_path(),
          &mut dst_manifest,
