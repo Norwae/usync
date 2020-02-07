@@ -14,6 +14,7 @@ pub struct Configuration {
     pub(crate) source: PathBuf,
     pub(crate) target: PathBuf,
     pub(crate) verbose: bool,
+    pub(crate) force_rebuild_manifest: bool,
     pub(crate) manifest_path: String,
     pub(crate) manifest_mode: ManifestMode,
 }
@@ -23,6 +24,11 @@ pub fn configure() -> Result<Configuration, Error> {
     let args = App::new("usync")
         .version("1.0")
         .author("Elisabeth 'TerraNova' Schulz")
+        .arg(
+            Arg::with_name("rebuild manifest")
+                .help("rebuild the required manifest(s), even if it already exists")
+                .long("force-rebuild-manifest")
+        )
         .arg(
             Arg::with_name("source")
                 .help("Sync source directory")
@@ -38,7 +44,7 @@ pub fn configure() -> Result<Configuration, Error> {
                 .required(true)
         )
         .arg(
-            Arg::with_name("manifest-file")
+            Arg::with_name("manifest file")
                 .long("manifest-file")
                 .help("Stored manifest file (relative to source directory)")
                 .takes_value(true)
@@ -71,7 +77,8 @@ pub fn configure() -> Result<Configuration, Error> {
             source: src.into(),
             target: trg.into(),
             verbose: args.is_present("verbose"),
-            manifest_path: args.value_of("manifest-file").unwrap().to_string(),
+            force_rebuild_manifest: args.is_present("rebuild manifest"),
+            manifest_path: args.value_of("manifest file").unwrap().to_string(),
             manifest_mode:  if args.value_of("hash-mode").unwrap() == "hash" {
                 ManifestMode::Hash
             } else {
