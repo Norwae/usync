@@ -26,7 +26,7 @@ fn push(base: &Path, name: &str) -> PathBuf {
     p
 }
 
-fn copy(cfg: &Configuration, target_dir: &Path, source_dir: &Path, target: &mut DirectoryEntry, source: &DirectoryEntry) -> Result<(), Error> {
+fn copy(target_dir: &Path, source_dir: &Path, target: &mut DirectoryEntry, source: &DirectoryEntry, cfg: &Configuration) -> Result<(), Error> {
     for dir in &source.subdirs {
         let target_subdir = push(target_dir, &dir.name);
         let source_subdir = push(source_dir, &dir.name);
@@ -42,7 +42,10 @@ fn copy(cfg: &Configuration, target_dir: &Path, source_dir: &Path, target: &mut 
         };
 
         if partner.hash_value != dir.hash_value {
-            copy(cfg, target_subdir.as_path(), source_subdir.as_path(), partner, dir)?;
+            if cfg.verbose {
+                println!("Descending into {}", target_subdir.to_string_lossy());
+            }
+            copy(target_subdir.as_path(), source_subdir.as_path(), partner, dir, &cfg)?;
         }
     }
 
@@ -73,12 +76,12 @@ fn main() -> Result<(), Error> {
     let src_manifest = tree::Manifest::create(src.as_path(), &cfg)?;
     let dst = cfg.target.canonicalize()?;
     let mut dst_manifest = tree::DirectoryEntry::new(dst.as_path(), &cfg)?;
-    copy(&cfg,
-         dst.as_path(),
+    copy(dst.as_path(),
          src.as_path(),
          &mut dst_manifest,
-         &src_manifest.0)?;
-
+         &src_manifest.0,
+         &cfg)?;
+    src_manifest.save(src.as_path(), &cfg)?;
 
     Ok(())
 }

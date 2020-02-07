@@ -81,26 +81,48 @@ impl Named for DirectoryEntry {
 pub struct Manifest(pub (crate) DirectoryEntry);
 
 impl Manifest {
-    pub fn create<S: AsRef<OsStr>>(root: S, cfg: &Configuration) -> Result<Manifest> {
+    fn manifest_file(root: &OsStr, cfg: &Configuration) -> PathBuf {
         let mut manifest_path = PathBuf::new();
         if cfg.manifest_path.is_absolute() {
             manifest_path.push(&cfg.manifest_path);
         } else {
-            manifest_path.push(root.as_ref());
+            manifest_path.push(root);
             manifest_path.push(&cfg.manifest_path);
         }
+
+        manifest_path
+    }
+
+    pub fn create<S: AsRef<OsStr>>(root: S, cfg: &Configuration) -> Result<Manifest> {
+        let manifest_path = Manifest::manifest_file(root.as_ref(), cfg);
 
         if cfg.verbose {
             println!("Resolved manifest path to {}", manifest_path.as_path().to_string_lossy());
         }
 
-        Manifest::load(manifest_path.as_path()).or_else(|_| {
+        Manifest::_load(manifest_path.as_path()).or_else(|e| {
+            if cfg.verbose {
+                println!("Manifest file not usable: {}", e)
+            }
             let de = DirectoryEntry::new(root, cfg);
             de.map(|e| Manifest(e))
         })
     }
 
-    pub fn load<S: AsRef<Path>>(file: S) -> Result<Manifest> {
+    pub fn save<S: AsRef<OsStr>>(&self, root: S, cfg: &Configuration) -> Result<()> {
+        let manifest_path = Manifest::manifest_file(root.as_ref(), cfg);
+        let file = File::create(manifest_path.as_path())?;
+        let r = bincode::serialize_into(file, self);
+        r.map_err(|e2| Error::new(ErrorKind::Other, e2))?;
+
+        if cfg.verbose {
+            println!("Saved manifest file to {}", manifest_path.to_string_lossy());
+        }
+
+        Ok(())
+    }
+
+    fn _load<S: AsRef<Path>>(file: S) -> Result<Manifest> {
         let file = File::open(file)?;
         let r= bincode::deserialize_from(file);
         r.map_err(|e2| Error::new(ErrorKind::Other, e2))
