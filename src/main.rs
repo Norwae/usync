@@ -68,6 +68,7 @@ fn main() -> Result<(), Error> {
     let cfg = config::configure()?;
     let src = cfg.source.canonicalize()?;
     let src_manifest = tree::Manifest::create(src.as_path(), &cfg)?;
+
     let dst = cfg.target.canonicalize()?;
     let mut dst_manifest = tree::DirectoryEntry::new(dst.as_path(), &cfg)?;
     copy(dst.as_path(),
@@ -75,7 +76,6 @@ fn main() -> Result<(), Error> {
          &mut dst_manifest,
          &src_manifest.0,
          &cfg)?;
-    src_manifest.save(src.as_path(), &cfg)?;
 
     Ok(())
 }

@@ -97,30 +97,27 @@ impl Manifest {
             println!("Resolved manifest path to {}", manifest_path.as_path().to_string_lossy());
         }
 
-        let m = Manifest::_load(manifest_path.as_path(), cfg);
-
-        match m {
-            Ok(manifest) => {
-                if !manifest.0.validate(root.as_ref()) {
-                    if cfg.verbose {
-                        println!("Rebuilding manifest after validation failure");
-                    }
-
-                    let rebuild = DirectoryEntry::new(root, cfg)?;
-
-                    Ok(Manifest(rebuild))
-                } else {
-                    Ok(manifest)
-                }
-            }
-            Err(e) => {
-                if cfg.verbose {
-                    println!("Manifest file not usable: {}", e)
-                }
-                let de = DirectoryEntry::new(root, cfg);
-                de.map(|e| Manifest(e))
+        let mut res = Manifest::_load(manifest_path.as_path(), cfg);
+        if res.is_ok() {
+            let m = res.as_ref().unwrap();
+            if !m.0.validate(root.as_ref()) {
+                res = Err(Error::new(ErrorKind::Other, "Manifest validation failed"))
             }
         }
+
+        res.or_else(|e| {
+            if cfg.verbose {
+                println!("Manifest file not usable: {}", e)
+            }
+            let de = DirectoryEntry::new(root, cfg);
+            de.and_then(|e| {
+                let manifest = Manifest(e);
+
+                manifest.save(manifest_path, cfg)?;
+
+                Ok(manifest)
+            })
+        })
     }
 
     pub fn save<S: AsRef<OsStr>>(&self, root: S, cfg: &Configuration) -> Result<()> {
