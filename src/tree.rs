@@ -1,5 +1,5 @@
 use std::ffi::OsStr;
-use std::fs::{File, read_dir, create_dir};
+use std::fs::{File, read_dir};
 use std::io::{Error, ErrorKind, Read, Result};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -36,16 +36,6 @@ impl Named for FileEntry {
 }
 
 impl FileEntry {
-    pub fn empty(path: &Path) -> FileEntry {
-        FileEntry {
-            name: String::from(path.to_path_buf().file_name().unwrap().to_string_lossy()),
-            modification_time: SystemTime::now(),
-            file_size: 0,
-            hash_value: [0u8; 32]
-        }
-    }
-
-
     pub fn new<S: AsRef<OsStr>>(path: S, config: &Configuration) -> Result<FileEntry> {
         let path = PathBuf::from(&path);
 
@@ -176,7 +166,7 @@ impl DirectoryEntry {
         Ok(())
     }
 
-    fn copy_subdirs(&self, path: &Path, source: &&DirectoryEntry, transmitter: &Transmitter, cfg: &Configuration) -> Result<()>{
+    fn copy_subdirs(&self, path: &Path, source: &&DirectoryEntry, transmitter: &dyn Transmitter, cfg: &Configuration) -> Result<()>{
         for source_dir in &source.subdirs {
             let existing_subdir = find_named(self.subdirs.as_slice(), &source_dir.name);
             let this_path = path.join(&source_dir.name);
@@ -282,7 +272,7 @@ impl Manifest {
 
     pub fn create_persistent<S: AsRef<OsStr>>(root: S, cfg: &Configuration) -> Result<Manifest> {
         let manifest_path = manifest_file(root.as_ref(), &cfg);
-        let mut cfg = cfg.with_additional_exclusion(manifest_path.as_path());
+        let cfg = cfg.with_additional_exclusion(manifest_path.as_path());
 
         if cfg.verbose {
             println!("Resolved manifest path to {}", manifest_path.as_path().to_string_lossy());

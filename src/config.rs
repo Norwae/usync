@@ -1,4 +1,4 @@
-use clap::{App, Arg, Values};
+use clap::{App, Arg};
 use std::path::{PathBuf, Path};
 use std::io::{Error, ErrorKind};
 use glob::Pattern;

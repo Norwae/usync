@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::io::{Result, Error, ErrorKind};
 
 pub trait Transmitter {
