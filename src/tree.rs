@@ -9,7 +9,7 @@ use serde::{Serialize, Deserialize};
 
 use crate::config::{ManifestMode, Configuration};
 use crate::util::{Named, find_named};
-use crate::filetransfer::Transmitter;
+use crate::file_transfer::Transmitter;
 
 type ShaSum = [u8; 32];
 

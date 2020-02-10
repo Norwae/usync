@@ -32,7 +32,7 @@ impl <'a> Transmitter for LocalTransmitter<'a> {
         };
 
         std::fs::create_dir_all(parent)?;
-        std::fs::copy(from, &to)?;
+        std::fs::copy(&from, &to)?;
         filetime::set_file_mtime(&to, time)?;
         Ok(())
     }
