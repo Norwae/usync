@@ -1,5 +1,5 @@
 use std::ffi::OsStr;
-use std::fs::{File, read_dir};
+use std::fs::{File, read_dir, create_dir};
 use std::io::{Error, ErrorKind, Read, Result};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -9,7 +9,6 @@ use serde::{Serialize, Deserialize};
 
 use crate::config::{ManifestMode, Configuration};
 use crate::util::{Named, find_named};
-
 
 type ShaSum = [u8; 32];
 
@@ -21,6 +20,14 @@ struct FileEntry {
     hash_value: ShaSum,
 }
 
+impl PartialEq for FileEntry {
+    fn eq(&self, other: &Self) -> bool {
+        self.file_size == other.file_size &&
+            self.modification_time == other.modification_time &&
+            self.hash_value == other.hash_value
+    }
+}
+
 impl Named for FileEntry {
     fn name(&self) -> &str {
         &self.name
@@ -28,6 +35,23 @@ impl Named for FileEntry {
 }
 
 impl FileEntry {
+    pub fn empty(path: &Path) -> FileEntry {
+        FileEntry {
+            name: String::from(path.to_path_buf().file_name().unwrap().to_string_lossy()),
+            modification_time: SystemTime::now(),
+            file_size: 0,
+            hash_value: [0u8; 32]
+        }
+    }
+
+    pub fn copy(target: &Path, src: &Path) -> Result<()>{
+        let metadata = src.metadata()?;
+        let time = filetime::FileTime::from_last_modification_time(&metadata);
+        std::fs::copy(src, target)?;
+        filetime::set_file_mtime(target, time)?;
+        Ok(())
+    }
+
     pub fn new<S: AsRef<OsStr>>(path: S, config: &Configuration) -> Result<FileEntry> {
         let path = PathBuf::from(&path);
 
@@ -126,7 +150,44 @@ impl DirectoryEntry {
         self.validate0(Path::new(path.as_ref()), cfg).unwrap_or(false)
     }
 
-    fn copy_from(&self, source: &DirectoryEntry, cfg: &Configuration)-> Result<()> {
+    fn copy_from(&self, target_path: &Path, source: &DirectoryEntry, source_path: &Path, cfg: &Configuration)-> Result<()> {
+        for source_dir in  &source.subdirs {
+            let existing_subdir = find_named(self.subdirs.as_slice(), &source_dir.name);
+            let mut source_path = source_path.to_path_buf();
+            source_path.push(&source_dir.name);
+            let mut target_path = target_path.to_path_buf();
+            target_path.push(&source_dir.name);
+
+            match existing_subdir {
+                None => {
+                    let subdir = DirectoryEntry::empty(&target_path);
+                    create_dir(&target_path)?;
+                    subdir.copy_from(target_path.as_path(), source_dir,source_path.as_path(), cfg)?;
+                }
+                Some(existing) => {
+                    if existing != source_dir {
+                        existing.copy_from(target_path.as_path(), source_dir, source_path.as_path(), cfg)?;
+                    }
+                }
+            }
+        }
+
+        for source_file in &source.files {
+            let existing_file = find_named(self.files.as_slice(), &source_file.name);
+            let mut source_path = source_path.to_path_buf();
+            source_path.push(&source_file.name);
+            let mut target_path = target_path.to_path_buf();
+            target_path.push(&source_file.name);
+
+            match existing_file {
+                None => FileEntry::copy(target_path.as_ref(), source_path.as_ref())?,
+                Some(existing) => {
+                    if existing != source_file {
+                        FileEntry::copy(target_path.as_ref(), source_path.as_ref())?
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -190,6 +251,13 @@ impl DirectoryEntry {
     }
 }
 
+impl PartialEq for DirectoryEntry {
+    fn eq(&self, other: &Self) -> bool {
+        other.modification_time == self.modification_time &&
+            other.hash_value == self.hash_value
+    }
+}
+
 impl Named for DirectoryEntry {
     fn name(&self) -> &str {
         &self.name
@@ -197,13 +265,13 @@ impl Named for DirectoryEntry {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct Manifest(DirectoryEntry);
+pub struct Manifest(DirectoryEntry, PathBuf);
 
 impl Manifest {
     pub fn create_ephemeral<S: AsRef<OsStr>>(root: S, cfg: &Configuration) -> Result<Manifest> {
-        let de = DirectoryEntry::new(root, cfg)?;
+        let de = DirectoryEntry::new(root.as_ref(), cfg)?;
 
-        Ok(Manifest(de))
+        Ok(Manifest(de, PathBuf::from(root.as_ref())))
     }
 
     pub fn create_persistent<S: AsRef<OsStr>>(root: S, cfg: &Configuration) -> Result<Manifest> {
@@ -228,7 +296,7 @@ impl Manifest {
             }
             let de = DirectoryEntry::new(root.as_ref(), &cfg);
             de.and_then(|e| {
-                let manifest = Manifest(e);
+                let manifest = Manifest(e, PathBuf::from(root.as_ref()));
 
                 manifest.save(root.as_ref(), &cfg)?;
 
@@ -238,7 +306,7 @@ impl Manifest {
     }
 
     pub fn copy_from(&self, source: &Manifest, cfg: &Configuration) -> Result<()> {
-        self.0.copy_from(&source.0, cfg)?;
+        self.0.copy_from(self.1.as_path(),&source.0, source.1.as_path(), cfg)?;
 
         Ok(())
     }
