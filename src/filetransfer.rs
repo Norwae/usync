@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::io::{Result, Error};
+use std::io::{Result, Error, ErrorKind};
 
 pub trait Transmitter {
     fn transmit(&self, path: &Path) -> Result<()>;
@@ -11,7 +11,7 @@ pub struct LocalTransmitter<'a> {
 }
 
 impl <'a> LocalTransmitter<'a> {
-    pub(crate) fn new(source_root: &'a Path, target_root: &'a Path) -> LocalTransmitter<'a>{
+    pub fn new(source_root: &'a Path, target_root: &'a Path) -> LocalTransmitter<'a>{
         LocalTransmitter {
             source_root,
             target_root
@@ -26,7 +26,12 @@ impl <'a> Transmitter for LocalTransmitter<'a> {
 
         let metadata = from.metadata()?;
         let time = filetime::FileTime::from_last_modification_time(&metadata);
-        std::fs::create_dir_all(&to.parent().unwrap())?;
+        let parent = match to.parent() {
+            None => return Err(Error::new(ErrorKind::NotFound, "Could not create parent directory: No parent")),
+            Some(p) => p,
+        };
+
+        std::fs::create_dir_all(parent)?;
         std::fs::copy(from, &to)?;
         filetime::set_file_mtime(&to, time)?;
         Ok(())

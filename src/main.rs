@@ -8,13 +8,12 @@ mod filetransfer;
 
 fn main() -> Result<(), Error> {
     let cfg = config::configure()?;
-    let src = cfg.source.canonicalize()?;
-    let src_manifest = tree::Manifest::create_persistent(src.as_path(), &cfg)?;
+    let target_root = cfg.target.canonicalize()?;
+    let source_root = cfg.source.canonicalize()?;
+    let transmitter = LocalTransmitter::new(&source_root, &target_root);
 
-    let dst = cfg.target.canonicalize()?;
-
-    let transmitter = LocalTransmitter::new(&src, &dst);
-    let mut dst_manifest = tree::Manifest::create_ephemeral(dst.as_path(), &cfg)?;
-    dst_manifest.copy_from(&src_manifest, &transmitter, &cfg);
+    let source = tree::Manifest::create_persistent(source_root.as_path(), &cfg)?;
+    let mut destination = tree::Manifest::create_ephemeral(source_root.as_path(), &cfg)?;
+    destination.copy_from(&source, &transmitter, &cfg);
     Ok(())
 }
