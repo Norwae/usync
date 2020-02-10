@@ -9,6 +9,7 @@ use serde::{Serialize, Deserialize};
 
 use crate::config::{ManifestMode, Configuration};
 use crate::util::{Named, find_named};
+use crate::filetransfer::Transmitter;
 
 type ShaSum = [u8; 32];
 
@@ -44,13 +45,6 @@ impl FileEntry {
         }
     }
 
-    pub fn copy(target: &Path, src: &Path) -> Result<()>{
-        let metadata = src.metadata()?;
-        let time = filetime::FileTime::from_last_modification_time(&metadata);
-        std::fs::copy(src, target)?;
-        filetime::set_file_mtime(target, time)?;
-        Ok(())
-    }
 
     pub fn new<S: AsRef<OsStr>>(path: S, config: &Configuration) -> Result<FileEntry> {
         let path = PathBuf::from(&path);
@@ -150,50 +144,62 @@ impl DirectoryEntry {
         self.validate0(Path::new(path.as_ref()), cfg).unwrap_or(false)
     }
 
-    fn copy_from(&self, target_path: &Path, source: &DirectoryEntry, source_path: &Path, cfg: &Configuration)-> Result<()> {
-        for source_dir in  &source.subdirs {
-            let existing_subdir = find_named(self.subdirs.as_slice(), &source_dir.name);
-            let mut source_path = source_path.to_path_buf();
-            source_path.push(&source_dir.name);
-            let mut target_path = target_path.to_path_buf();
-            target_path.push(&source_dir.name);
-
-            match existing_subdir {
-                None => {
-                    let subdir = DirectoryEntry::empty(&target_path);
-                    create_dir(&target_path)?;
-                    subdir.copy_from(target_path.as_path(), source_dir,source_path.as_path(), cfg)?;
-                }
-                Some(existing) => {
-                    if existing != source_dir {
-                        existing.copy_from(target_path.as_path(), source_dir, source_path.as_path(), cfg)?;
-                    }
-                }
-            }
-        }
-
-        for source_file in &source.files {
-            let existing_file = find_named(self.files.as_slice(), &source_file.name);
-            let mut source_path = source_path.to_path_buf();
-            source_path.push(&source_file.name);
-            let mut target_path = target_path.to_path_buf();
-            target_path.push(&source_file.name);
-
-            match existing_file {
-                None => FileEntry::copy(target_path.as_ref(), source_path.as_ref())?,
-                Some(existing) => {
-                    if existing != source_file {
-                        FileEntry::copy(target_path.as_ref(), source_path.as_ref())?
-                    }
-                }
-            }
-        }
+    fn copy_from(&self, path: &Path, source: &DirectoryEntry, transmitter: &dyn Transmitter, cfg: &Configuration)-> Result<()> {
+        self.copy_subdirs(path, &source, transmitter, cfg)?;
+        self.copy_files(path, &source, transmitter, cfg)?;
         Ok(())
     }
 
-    pub fn empty<S: AsRef<OsStr>>(path: S) -> DirectoryEntry {
+    fn copy_files(&self, path: &Path, source: &DirectoryEntry, transmitter: &dyn Transmitter, cfg: &Configuration) -> Result<()>{
+        for source_file in &source.files {
+            let existing_file = find_named(self.files.as_slice(), &source_file.name);
+            let this_path = path.join(&source_file.name);
+
+            match existing_file {
+                None => {
+                    if cfg.verbose {
+                        println!("Transmitting new file: {}", &this_path.to_string_lossy())
+                    }
+                    transmitter.transmit(&this_path)?
+                }
+                Some(existing) => {
+                    if existing != source_file {
+                        if cfg.verbose {
+                            println!("Overwriting changed file: {}", &this_path.to_string_lossy());
+                        }
+                        transmitter.transmit(&this_path)?
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn copy_subdirs(&self, path: &Path, source: &&DirectoryEntry, transmitter: &Transmitter, cfg: &Configuration) -> Result<()>{
+        for source_dir in &source.subdirs {
+            let existing_subdir = find_named(self.subdirs.as_slice(), &source_dir.name);
+            let this_path = path.join(&source_dir.name);
+
+            match existing_subdir {
+                None => {
+                    let subdir = DirectoryEntry::empty(&source_dir.name);
+                    subdir.copy_from(&this_path, source_dir, transmitter, cfg)?;
+                }
+                Some(existing) => {
+                    if existing != source_dir {
+                        existing.copy_from(&this_path, source_dir, transmitter, cfg)?;
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn empty(name: &str) -> DirectoryEntry {
         DirectoryEntry {
-            name: filename_to_string(Path::new(&path).file_name()),
+            name: String::from(name),
             modification_time: SystemTime::now(),
             subdirs: Vec::new(),
             files: Vec::new(),
@@ -265,13 +271,13 @@ impl Named for DirectoryEntry {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct Manifest(DirectoryEntry, PathBuf);
+pub struct Manifest(DirectoryEntry);
 
 impl Manifest {
     pub fn create_ephemeral<S: AsRef<OsStr>>(root: S, cfg: &Configuration) -> Result<Manifest> {
         let de = DirectoryEntry::new(root.as_ref(), cfg)?;
 
-        Ok(Manifest(de, PathBuf::from(root.as_ref())))
+        Ok(Manifest(de))
     }
 
     pub fn create_persistent<S: AsRef<OsStr>>(root: S, cfg: &Configuration) -> Result<Manifest> {
@@ -296,7 +302,7 @@ impl Manifest {
             }
             let de = DirectoryEntry::new(root.as_ref(), &cfg);
             de.and_then(|e| {
-                let manifest = Manifest(e, PathBuf::from(root.as_ref()));
+                let manifest = Manifest(e);
 
                 manifest.save(root.as_ref(), &cfg)?;
 
@@ -305,8 +311,10 @@ impl Manifest {
         })
     }
 
-    pub fn copy_from(&self, source: &Manifest, cfg: &Configuration) -> Result<()> {
-        self.0.copy_from(self.1.as_path(),&source.0, source.1.as_path(), cfg)?;
+    pub fn copy_from(&self, source: &Manifest, transmitter: &dyn Transmitter, cfg: &Configuration) -> Result<()> {
+        let path = PathBuf::new();
+        let source = &source.0;
+        self.0.copy_from(&path, source, transmitter, cfg)?;
 
         Ok(())
     }
