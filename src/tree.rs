@@ -39,7 +39,7 @@ impl FileEntry {
     pub fn new<S: AsRef<OsStr>>(path: S, config: &Configuration) -> Result<FileEntry> {
         let path = PathBuf::from(&path);
 
-        let hash_value = if config.manifest_mode == ManifestMode::Hash {
+        let hash_value = if config.manifest_mode() == ManifestMode::Hash {
             unsafe {
                 let file = File::open(path.as_path())?;
                 let mmap = memmap2::Mmap::map(&file)?;
@@ -52,7 +52,7 @@ impl FileEntry {
         let metadata = path.metadata()?;
         let name = filename_to_string(path.file_name());
 
-        if config.verbose {
+        if config.verbose() {
             println!("Hashed file {} into {}", path.to_string_lossy(), hex::encode(&hash_value))
         }
 
@@ -147,14 +147,14 @@ impl DirectoryEntry {
 
             match existing_file {
                 None => {
-                    if cfg.verbose {
+                    if cfg.verbose() {
                         println!("Transmitting new file: {}", &this_path.to_string_lossy())
                     }
                     transmitter.transmit(&this_path)?
                 }
                 Some(existing) => {
                     if existing != source_file {
-                        if cfg.verbose {
+                        if cfg.verbose() {
                             println!("Overwriting changed file: {}", &this_path.to_string_lossy());
                         }
                         transmitter.transmit(&this_path)?
@@ -211,7 +211,7 @@ impl DirectoryEntry {
             let sub_path = path.join(entry.file_name());
 
             if config.is_excluded(sub_path.as_path()) {
-                if config.verbose {
+                if config.verbose() {
                     println!("Excluding file {}", sub_path.to_string_lossy())
                 }
                 continue;
@@ -233,7 +233,7 @@ impl DirectoryEntry {
 
         let hash_value = hash(hash_input.as_ref())?;
 
-        if config.verbose {
+        if config.verbose() {
             println!("Hashed directory {} into {}", path.to_string_lossy(), hex::encode(&hash_value))
         }
 
@@ -274,7 +274,7 @@ impl Manifest {
         let manifest_path = manifest_file(root.as_ref(), &cfg);
         let cfg = cfg.with_additional_exclusion(manifest_path.as_path());
 
-        if cfg.verbose {
+        if cfg.verbose() {
             println!("Resolved manifest path to {}", manifest_path.as_path().to_string_lossy());
         }
 
@@ -287,7 +287,7 @@ impl Manifest {
         }
 
         res.or_else(|e| {
-            if cfg.verbose {
+            if cfg.verbose() {
                 println!("Manifest file not usable: {}", e)
             }
             let de = DirectoryEntry::new(root.as_ref(), &cfg);
@@ -316,7 +316,7 @@ impl Manifest {
         let r = bincode::serialize_into(file, self);
         r.map_err(|e2| Error::new(ErrorKind::Other, e2))?;
 
-        if cfg.verbose {
+        if cfg.verbose() {
             println!("Saved manifest file to {}", manifest_path.to_string_lossy());
         }
 
@@ -324,7 +324,7 @@ impl Manifest {
     }
 
     fn _load<S: AsRef<Path>>(file: S, cfg: &Configuration) -> Result<Manifest> {
-        if cfg.force_rebuild_manifest {
+        if cfg.force_rebuild() {
             return Err(Error::new(ErrorKind::Other, "Forced rebuild of manifest"));
         }
         let file = File::open(file)?;
@@ -348,11 +348,12 @@ fn filename_to_string(filename: Option<&OsStr>) -> String {
 
 fn manifest_file(root: &OsStr, cfg: &Configuration) -> PathBuf {
     let mut manifest_path = PathBuf::new();
-    if cfg.manifest_path.is_absolute() {
-        manifest_path.push(&cfg.manifest_path);
+    let cfg_path = cfg.manifest_path();
+    if cfg_path.is_absolute() {
+        manifest_path.push(cfg_path);
     } else {
         manifest_path.push(root);
-        manifest_path.push(&cfg.manifest_path);
+        manifest_path.push(cfg_path);
     }
 
     manifest_path

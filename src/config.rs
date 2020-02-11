@@ -1,7 +1,9 @@
-use clap::{App, Arg};
-use std::path::{PathBuf, Path};
 use std::io::{Error, ErrorKind};
+use std::path::{Path, PathBuf};
+
+use clap::{App, Arg};
 use glob::Pattern;
+use crate::file_transfer::{Transmitter, LocalTransmitter};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ManifestMode {
@@ -9,24 +11,64 @@ pub enum ManifestMode {
     Hash,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum ProcessRole {
+    Sender,
+    Receiver
+}
+
 #[derive(Debug,Clone)]
 pub struct Configuration {
-    pub(crate) source: PathBuf,
-    pub(crate) target: PathBuf,
-    pub(crate) verbose: bool,
-    pub(crate) force_rebuild_manifest: bool,
-    pub(crate) manifest_path: PathBuf,
-    pub(crate) manifest_mode: ManifestMode,
+    source: PathBuf,
+    target: PathBuf,
+    verbose: bool,
+    force_rebuild_manifest: bool,
+    manifest_path: PathBuf,
+    manifest_mode: ManifestMode,
+    role: Option<ProcessRole>,
     exclude_patterns: Vec<Pattern>
 }
 
 impl Configuration {
+    #[inline]
+    pub fn force_rebuild(&self) -> bool {
+        self.force_rebuild_manifest
+    }
+    #[inline]
+    pub fn manifest_mode(&self) -> ManifestMode {
+        self.manifest_mode
+    }
+
+    #[inline]
+    pub fn manifest_path(&self) -> &Path {
+        &self.manifest_path
+    }
+
+    #[inline]
+    pub fn target(&self) -> &Path {
+        &self.target
+    }
+
+    #[inline]
+    pub fn source(&self) -> &Path {
+        &self.source
+    }
+
+    #[inline]
+    pub fn verbose(&self) -> bool {
+        self.verbose
+    }
+
     pub fn with_additional_exclusion(&self, exclude: &Path) -> Configuration {
         let mut copy = self.clone();
         let pattern = Pattern::new(exclude.to_string_lossy().as_ref()).unwrap();
         copy.exclude_patterns.push(pattern);
 
         copy
+    }
+
+    pub fn transmitter(&self) -> Box<dyn Transmitter> {
+        Box::new(LocalTransmitter::new(self))
     }
 
     pub fn is_excluded(&self, str: &Path) -> bool {
@@ -49,6 +91,13 @@ pub fn configure() -> Result<Configuration, Error> {
             Arg::with_name("rebuild manifest")
                 .help("rebuild the required manifest(s), even if it already exists")
                 .long("force-rebuild-manifest")
+        )
+        .arg(
+            Arg::with_name("role")
+                .hidden(true)
+                .help("Role of a remote-spawned instance.")
+                .long("role")
+                .possible_values(&["sender", "receiver"])
         )
         .arg(
             Arg::with_name("source")
@@ -122,6 +171,11 @@ pub fn configure() -> Result<Configuration, Error> {
             } else {
                 ManifestMode::TimestampTest
             },
+            role: args.value_of("role").and_then(|st| match st {
+                "sender" => Some(ProcessRole::Sender),
+                "receiver" => Some(ProcessRole::Receiver),
+                _ => None
+            }),
             exclude_patterns
         })
     }

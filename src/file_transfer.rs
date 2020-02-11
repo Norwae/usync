@@ -1,28 +1,40 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::io::{Result, Error, ErrorKind};
+use crate::tree::Manifest;
+use crate::config::Configuration;
 
 pub trait Transmitter {
     fn transmit(&self, path: &Path) -> Result<()>;
+    fn produce_source_manifest(&self, cfg: &Configuration) -> Result<Manifest>;
+    fn produce_target_manifest(&self, cfg: &Configuration) -> Result<Manifest>;
 }
 
-pub struct LocalTransmitter<'a> {
-    source_root: &'a Path,
-    target_root: &'a Path
+pub struct LocalTransmitter {
+    source: PathBuf,
+    target: PathBuf
 }
 
-impl <'a> LocalTransmitter<'a> {
-    pub fn new(source_root: &'a Path, target_root: &'a Path) -> LocalTransmitter<'a>{
+impl LocalTransmitter {
+    pub fn new(cfg: &Configuration) -> LocalTransmitter {
         LocalTransmitter {
-            source_root,
-            target_root
+            source: cfg.source().to_owned(),
+            target: cfg.target().to_owned()
         }
     }
 }
 
-impl <'a> Transmitter for LocalTransmitter<'a> {
+impl Transmitter for LocalTransmitter {
+    fn produce_source_manifest(&self, cfg: &Configuration) -> Result<Manifest> {
+        Manifest::create_persistent(&self.source, cfg)
+    }
+
+    fn produce_target_manifest(&self, cfg: &Configuration) -> Result<Manifest> {
+        Manifest::create_ephemeral(&self.target, cfg)
+    }
+
     fn transmit(&self, path: &Path) -> Result<()> {
-        let from = self.source_root.join(path);
-        let to = self.target_root.join(path);
+        let from = self.source.join(path);
+        let to = self.target.join(path);
 
         let metadata = from.metadata()?;
         let time = filetime::FileTime::from_last_modification_time(&metadata);
