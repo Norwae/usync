@@ -24,14 +24,6 @@ impl LocalTransmitter {
 }
 
 impl Transmitter for LocalTransmitter {
-    fn produce_source_manifest(&self, cfg: &Configuration) -> Result<Manifest> {
-        Manifest::create_persistent(&self.source, cfg)
-    }
-
-    fn produce_target_manifest(&self, cfg: &Configuration) -> Result<Manifest> {
-        Manifest::create_ephemeral(&self.target, cfg)
-    }
-
     fn transmit(&self, path: &Path) -> Result<()> {
         let from = self.source.join(path);
         let to = self.target.join(path);
@@ -47,5 +39,13 @@ impl Transmitter for LocalTransmitter {
         std::fs::copy(&from, &to)?;
         filetime::set_file_mtime(&to, time)?;
         Ok(())
+    }
+
+    fn produce_source_manifest(&self, cfg: &Configuration) -> Result<Manifest> {
+        Manifest::create_persistent(&self.source, cfg.verbose(), cfg.hash_settings(), cfg.manifest_path())
+    }
+
+    fn produce_target_manifest(&self, cfg: &Configuration) -> Result<Manifest> {
+        Manifest::create_ephemeral(&self.target, cfg.verbose(), cfg.hash_settings())
     }
 }

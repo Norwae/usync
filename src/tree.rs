@@ -7,10 +7,9 @@ use std::time::SystemTime;
 use ring::digest::{Context, SHA256};
 use serde::{Serialize, Deserialize};
 
-use crate::config::{ManifestMode, Configuration, HashSettings};
+use crate::config::{ManifestMode, HashSettings};
 use crate::util::{Named, find_named};
 use crate::file_transfer::Transmitter;
-use std::collections::HashSet;
 
 type ShaSum = [u8; 32];
 
@@ -135,27 +134,27 @@ impl DirectoryEntry {
         self.validate0(Path::new(path.as_ref()), settings).unwrap_or(false)
     }
 
-    fn copy_from(&self, path: &Path, source: &DirectoryEntry, transmitter: &dyn Transmitter, cfg: &Configuration)-> Result<()> {
-        self.copy_subdirs(path, &source, transmitter, cfg)?;
-        self.copy_files(path, &source, transmitter, cfg)?;
+    fn copy_from(&self, path: &Path, source: &DirectoryEntry, transmitter: &dyn Transmitter, verbose: bool)-> Result<()> {
+        self.copy_subdirs(path, &source, transmitter, verbose)?;
+        self.copy_files(path, &source, transmitter, verbose)?;
         Ok(())
     }
 
-    fn copy_files(&self, path: &Path, source: &DirectoryEntry, transmitter: &dyn Transmitter, cfg: &Configuration) -> Result<()>{
+    fn copy_files(&self, path: &Path, source: &DirectoryEntry, transmitter: &dyn Transmitter, verbose: bool) -> Result<()>{
         for source_file in &source.files {
             let existing_file = find_named(self.files.as_slice(), &source_file.name);
             let this_path = path.join(&source_file.name);
 
             match existing_file {
                 None => {
-                    if cfg.verbose() {
+                    if verbose {
                         println!("Transmitting new file: {}", &this_path.to_string_lossy())
                     }
                     transmitter.transmit(&this_path)?
                 }
                 Some(existing) => {
                     if existing != source_file {
-                        if cfg.verbose() {
+                        if verbose {
                             println!("Overwriting changed file: {}", &this_path.to_string_lossy());
                         }
                         transmitter.transmit(&this_path)?
@@ -167,7 +166,7 @@ impl DirectoryEntry {
         Ok(())
     }
 
-    fn copy_subdirs(&self, path: &Path, source: &&DirectoryEntry, transmitter: &dyn Transmitter, cfg: &Configuration) -> Result<()>{
+    fn copy_subdirs(&self, path: &Path, source: &DirectoryEntry, transmitter: &dyn Transmitter, verbose: bool) -> Result<()>{
         for source_dir in &source.subdirs {
             let existing_subdir = find_named(self.subdirs.as_slice(), &source_dir.name);
             let this_path = path.join(&source_dir.name);
@@ -175,11 +174,11 @@ impl DirectoryEntry {
             match existing_subdir {
                 None => {
                     let subdir = DirectoryEntry::empty(&source_dir.name);
-                    subdir.copy_from(&this_path, source_dir, transmitter, cfg)?;
+                    subdir.copy_from(&this_path, source_dir, transmitter, verbose)?;
                 }
                 Some(existing) => {
                     if existing != source_dir {
-                        existing.copy_from(&this_path, source_dir, transmitter, cfg)?;
+                        existing.copy_from(&this_path, source_dir, transmitter, verbose)?;
                     }
                 }
             }
@@ -265,16 +264,16 @@ impl Named for DirectoryEntry {
 pub struct Manifest(DirectoryEntry);
 
 impl Manifest {
-    pub fn create_ephemeral<S: AsRef<OsStr>>(root: S, cfg: &Configuration) -> Result<Manifest> {
-        let de = DirectoryEntry::new(root.as_ref(), cfg.verbose(),cfg.hash_settings())?;
+    pub fn create_ephemeral<S: AsRef<OsStr>>(root: S, verbose: bool, settings: &HashSettings) -> Result<Manifest> {
+        let de = DirectoryEntry::new(root.as_ref(), verbose, settings)?;
 
         Ok(Manifest(de))
     }
 
-    pub fn create_persistent<S: AsRef<OsStr>>(root: S, cfg: &Configuration) -> Result<Manifest> {
-        let manifest_path = manifest_file(root.as_ref(), &cfg);
-        let settings = cfg.hash_settings().with_additional_exclusion(manifest_path.as_path());
-        let verbose = cfg.verbose();
+    pub fn create_persistent<S: AsRef<OsStr>>(root: S, verbose: bool, settings: &HashSettings, manifest_path: &Path) -> Result<Manifest> {
+        let manifest_path = manifest_file(root.as_ref(), manifest_path);
+        let settings = settings.with_additional_exclusion(manifest_path.as_path());
+
 
         if verbose {
             println!("Resolved manifest path to {}", manifest_path.as_path().to_string_lossy());
@@ -296,29 +295,31 @@ impl Manifest {
             de.and_then(|e| {
                 let manifest = Manifest(e);
 
-                manifest.save(root.as_ref(), &cfg)?;
+                manifest._save(verbose, &manifest_path)?;
 
                 Ok(manifest)
             })
         })
     }
 
-    pub fn copy_from(&self, source: &Manifest, transmitter: &dyn Transmitter, cfg: &Configuration) -> Result<()> {
+    pub fn copy_from(&self, source: &Manifest, transmitter: &dyn Transmitter, verbose: bool) -> Result<()> {
         let path = PathBuf::new();
         let source = &source.0;
-        self.0.copy_from(&path, source, transmitter, cfg)?;
+        self.0.copy_from(&path, source, transmitter, verbose)?;
 
         Ok(())
     }
 
-    pub fn save<S: AsRef<OsStr>>(&self, root: S, cfg: &Configuration) -> Result<()> {
-        let manifest_path = manifest_file(root.as_ref(), cfg);
-        println!("Opening file {} for saving manifest", manifest_path.to_string_lossy());
-        let file = File::create(manifest_path.as_path())?;
-        let r = bincode::serialize_into(file, self);
-        r.map_err(|e2| Error::new(ErrorKind::Other, e2))?;
+    fn _save(&self, verbose: bool, manifest_path: &Path) -> Result<()> {
+        if verbose {
+            println!("Opening file {} for saving manifest", manifest_path.to_string_lossy());
+        }
 
-        if cfg.verbose() {
+        let file = File::create(manifest_path)?;
+        let r = bincode::serialize_into(file, self);
+        r.map_err(|e| Error::new(ErrorKind::Other, e))?;
+
+        if verbose {
             println!("Saved manifest file to {}", manifest_path.to_string_lossy());
         }
 
@@ -331,7 +332,7 @@ impl Manifest {
         }
         let file = File::open(file)?;
         bincode::deserialize_from(file)
-            .map_err(|e2| Error::new(ErrorKind::Other, e2))
+            .map_err(|e| Error::new(ErrorKind::Other, e))
     }
 }
 
@@ -348,9 +349,9 @@ fn filename_to_string(filename: Option<&OsStr>) -> String {
     String::from(filename.unwrap().to_string_lossy())
 }
 
-fn manifest_file(root: &OsStr, cfg: &Configuration) -> PathBuf {
+fn manifest_file(root: &OsStr, cfg_path: &Path) -> PathBuf {
     let mut manifest_path = PathBuf::new();
-    let cfg_path = cfg.manifest_path();
+
     if cfg_path.is_absolute() {
         manifest_path.push(cfg_path);
     } else {

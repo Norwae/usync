@@ -5,6 +5,7 @@ use clap::{App, Arg};
 use glob::Pattern;
 use crate::file_transfer::{Transmitter, LocalTransmitter};
 
+
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ManifestMode {
     TimestampTest,
