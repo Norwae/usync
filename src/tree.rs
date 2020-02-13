@@ -36,12 +36,11 @@ impl Named for FileEntry {
 }
 
 impl FileEntry {
-    pub fn new<S: AsRef<OsStr>>(path: S, verbose: bool, settings: &HashSettings) -> Result<FileEntry> {
-        let path = PathBuf::from(&path);
+    fn new(path: &Path, verbose: bool, settings: &HashSettings) -> Result<FileEntry> {
 
         let hash_value = if settings.manifest_mode() == ManifestMode::Hash {
             unsafe {
-                let file = File::open(path.as_path())?;
+                let file = File::open(path)?;
                 let mmap = memmap2::Mmap::map(&file)?;
                 hash(mmap.as_ref())?
             }
@@ -75,7 +74,7 @@ struct DirectoryEntry {
 }
 
 impl DirectoryEntry {
-    fn validate0(&self, path: &Path, settings: &HashSettings) -> Result<bool> {
+    fn validate0(&self, path: &mut PathBuf, settings: &HashSettings) -> Result<bool> {
         if !path.exists() {
             return Ok(false);
         }
@@ -91,9 +90,10 @@ impl DirectoryEntry {
         for entry in path.read_dir()? {
             let entry = entry?;
             let name = entry.file_name();
-            let sub_path = path.join(&name);
+            path.push(&name);
 
-            if settings.is_excluded(sub_path.as_path()) {
+            if settings.is_excluded(path.as_ref()) {
+                path.pop();
                 continue;
             }
 
@@ -103,9 +103,10 @@ impl DirectoryEntry {
                 match found {
                     None => return Ok(false),
                     Some(o) => {
-                        if !o.validate(sub_path, settings) {
+                        if !o.validate0(path, settings)? {
                             return Ok(false);
                         }
+                        path.pop();
                     }
                 }
             } else {
@@ -113,13 +114,14 @@ impl DirectoryEntry {
                 match found {
                     None => return Ok(false),
                     Some(o) => {
-                        let meta = sub_path.metadata()?;
+                        let meta = path.metadata()?;
                         let mismatch =
                             meta.modified()? != o.modification_time ||
                                 meta.len() != o.file_size;
                         if mismatch {
                             return Ok(false);
                         }
+                        path.pop();
                     }
                 }
             }
@@ -130,8 +132,8 @@ impl DirectoryEntry {
     }
 
 
-    fn validate<S: AsRef<OsStr>>(&self, path: S, settings: &HashSettings) -> bool {
-        self.validate0(Path::new(path.as_ref()), settings).unwrap_or(false)
+    fn validate(&self, path: &mut PathBuf, settings: &HashSettings) -> bool {
+        self.validate0(path, settings).unwrap_or(false)
     }
 
     fn copy_from(&self, path: &Path, source: &DirectoryEntry, transmitter: &dyn Transmitter, verbose: bool)-> Result<()> {
@@ -198,43 +200,49 @@ impl DirectoryEntry {
     }
 
     pub fn new<S: AsRef<OsStr>>(path: S, verbose: bool, settings: &HashSettings) -> Result<DirectoryEntry> {
-        let path = Path::new(&path);
-        let dir = read_dir(path)?;
+        DirectoryEntry::create(&mut PathBuf::from(path.as_ref()), verbose, settings)
+    }
+
+    fn create(pb: &mut PathBuf, verbose: bool, settings: &HashSettings) -> Result<DirectoryEntry> {
+        let dir = read_dir(&pb)?;
         let mut subdirs: Vec<DirectoryEntry> = Vec::new();
         let mut files: Vec<FileEntry> = Vec::new();
         let mut hash_input: Vec<u8> = Vec::new();
-        let modification_time = path.metadata()?.modified()?;
-        let name = filename_to_string(path.file_name());
+        let modification_time = pb.metadata()?.modified()?;
+        let name = filename_to_string(pb.file_name());
 
         for entry in dir {
             let entry = entry?;
-            let sub_path = path.join(entry.file_name());
+            pb.push(entry.file_name());
 
-            if settings.is_excluded(sub_path.as_path()) {
+            if settings.is_excluded(pb.as_ref()) {
                 if verbose {
-                    println!("Excluding file {}", sub_path.to_string_lossy())
+                    println!("Excluding file {}", pb.to_string_lossy())
                 }
+                pb.pop();
                 continue;
             }
 
             if entry.metadata()?.is_dir() {
-                let subtree = DirectoryEntry::new(sub_path, verbose, settings)?;
+                let subtree = DirectoryEntry::create(pb, verbose, settings)?;
                 hash_input.extend(subtree.name.as_bytes());
                 hash_input.extend(&subtree.hash_value);
                 subdirs.push(subtree);
             } else {
-                let file = FileEntry::new(sub_path, verbose, settings)?;
+                let file = FileEntry::new(pb, verbose, settings)?;
                 hash_input.extend(file.name.as_bytes());
                 hash_input.extend(&file.file_size.to_le_bytes());
                 hash_input.extend(&file.hash_value);
                 files.push(file);
             }
+
+            pb.pop();
         }
 
         let hash_value = hash(hash_input.as_ref())?;
 
         if verbose {
-            println!("Hashed directory {} into {}", path.to_string_lossy(), hex::encode(&hash_value))
+            println!("Hashed directory {} into {}", pb.to_string_lossy(), hex::encode(&hash_value))
         }
 
         Ok(DirectoryEntry {
@@ -274,7 +282,6 @@ impl Manifest {
         let manifest_path = manifest_file(root.as_ref(), manifest_path);
         let settings = settings.with_additional_exclusion(manifest_path.as_path());
 
-
         if verbose {
             println!("Resolved manifest path to {}", manifest_path.as_path().to_string_lossy());
         }
@@ -282,7 +289,7 @@ impl Manifest {
         let mut res = Manifest::_load(manifest_path.as_path(), &settings);
         if res.is_ok() {
             let m = res.as_ref().unwrap();
-            if !m.0.validate(root.as_ref(), &settings) {
+            if !m.0.validate(&mut PathBuf::from(root.as_ref()), &settings) {
                 res = Err(Error::new(ErrorKind::Other, "Manifest validation failed"))
             }
         }
