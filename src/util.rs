@@ -11,3 +11,4 @@ pub fn find_named<T: Named, S : AsRef<str>>(all: &[T], name: S) -> Option<&T> {
     }
     None
 }
+

@@ -14,31 +14,56 @@ pub enum ManifestMode {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ProcessRole {
     Sender,
-    Receiver
+    Receiver,
 }
 
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
+pub struct HashSettings {
+    force_rebuild: bool,
+    mode: ManifestMode,
+    exclude_patterns: Vec<Pattern>,
+}
+
+#[derive(Debug, Clone)]
 pub struct Configuration {
+    role: Option<ProcessRole>,
     source: PathBuf,
     target: PathBuf,
     verbose: bool,
-    force_rebuild_manifest: bool,
+    hash: HashSettings,
     manifest_path: PathBuf,
-    manifest_mode: ManifestMode,
-    role: Option<ProcessRole>,
-    exclude_patterns: Vec<Pattern>
 }
 
-impl Configuration {
+impl HashSettings {
     #[inline]
     pub fn force_rebuild(&self) -> bool {
-        self.force_rebuild_manifest
+        self.force_rebuild
     }
     #[inline]
     pub fn manifest_mode(&self) -> ManifestMode {
-        self.manifest_mode
+        self.mode
     }
 
+    pub fn is_excluded(&self, str: &Path) -> bool {
+        for pattern in &self.exclude_patterns {
+            if pattern.matches_path(str) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    pub fn with_additional_exclusion(&self, exclude: &Path) -> HashSettings {
+        let mut copy = self.clone();
+        let pattern = Pattern::new(exclude.to_string_lossy().as_ref()).unwrap();
+        copy.exclude_patterns.push(pattern);
+
+        copy
+    }
+}
+
+impl Configuration {
     #[inline]
     pub fn manifest_path(&self) -> &Path {
         &self.manifest_path
@@ -54,32 +79,19 @@ impl Configuration {
         &self.source
     }
 
+    pub fn hash_settings(&self) -> &HashSettings {
+        &self.hash
+    }
+
     #[inline]
     pub fn verbose(&self) -> bool {
         self.verbose
-    }
-
-    pub fn with_additional_exclusion(&self, exclude: &Path) -> Configuration {
-        let mut copy = self.clone();
-        let pattern = Pattern::new(exclude.to_string_lossy().as_ref()).unwrap();
-        copy.exclude_patterns.push(pattern);
-
-        copy
     }
 
     pub fn transmitter(&self) -> Box<dyn Transmitter> {
         Box::new(LocalTransmitter::new(self))
     }
 
-    pub fn is_excluded(&self, str: &Path) -> bool {
-        for pattern in &self.exclude_patterns {
-            if pattern.matches_path(str) {
-                return true;
-            }
-        }
-
-        false
-    }
 }
 
 
@@ -121,11 +133,11 @@ pub fn configure() -> Result<Configuration, Error> {
                 .default_value(".usync.manifest")
         )
         .arg(Arg::with_name("hash-mode")
-                .help("hashing mode")
-                .long("hash-mode")
-                .takes_value(true)
-                .default_value("hash")
-                .possible_values(&["hash", "timestamp"])
+            .help("hashing mode")
+            .long("hash-mode")
+            .takes_value(true)
+            .default_value("hash")
+            .possible_values(&["hash", "timestamp"])
         )
         .arg(
             Arg::with_name("verbose")
@@ -161,23 +173,24 @@ pub fn configure() -> Result<Configuration, Error> {
         Err(Error::new(ErrorKind::NotFound, "Target path not available"))
     } else {
         Ok(Configuration {
+            hash: HashSettings {
+                force_rebuild: args.is_present("rebuild manifest"),
+                mode: if args.value_of("hash-mode").unwrap() == "hash" {
+                    ManifestMode::Hash
+                } else {
+                    ManifestMode::TimestampTest
+                },
+                exclude_patterns,
+            },
             source: src.into(),
             target: trg.into(),
             verbose: args.is_present("verbose"),
-            force_rebuild_manifest: args.is_present("rebuild manifest"),
             manifest_path: Path::new(args.value_of("manifest file").unwrap()).into(),
-            manifest_mode:  if args.value_of("hash-mode").unwrap() == "hash" {
-                ManifestMode::Hash
-            } else {
-                ManifestMode::TimestampTest
-            },
             role: args.value_of("role").and_then(|st| match st {
                 "sender" => Some(ProcessRole::Sender),
                 "receiver" => Some(ProcessRole::Receiver),
                 _ => None
             }),
-            exclude_patterns
         })
     }
-
 }
