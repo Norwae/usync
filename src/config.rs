@@ -28,11 +28,11 @@ pub struct HashSettings {
 #[derive(Debug, Clone)]
 pub struct Configuration {
     role: Option<ProcessRole>,
-    source: PathBuf,
-    target: PathBuf,
+    source: Option<PathBuf>,
+    target: Option<PathBuf>,
     verbose: bool,
     hash: HashSettings,
-    manifest_path: PathBuf,
+    manifest_path: Option<PathBuf>,
 }
 
 impl HashSettings {
@@ -67,17 +67,22 @@ impl HashSettings {
 impl Configuration {
     #[inline]
     pub fn manifest_path(&self) -> &Path {
-        &self.manifest_path
+        &self.manifest_path.as_ref().unwrap()
     }
 
     #[inline]
     pub fn target(&self) -> &Path {
-        &self.target
+        &self.target.as_ref().unwrap()
+    }
+
+    #[inline]
+    pub fn role(&self) -> Option<ProcessRole> {
+        self.role
     }
 
     #[inline]
     pub fn source(&self) -> &Path {
-        &self.source
+        &self.source.as_ref().unwrap()
     }
 
     pub fn hash_settings(&self) -> &HashSettings {
@@ -92,7 +97,6 @@ impl Configuration {
     pub fn transmitter(&self) -> Box<dyn Transmitter> {
         Box::new(LocalTransmitter::new(self))
     }
-
 }
 
 
@@ -107,9 +111,9 @@ pub fn configure() -> Result<Configuration, Error> {
         )
         .arg(
             Arg::with_name("role")
-                .hidden(true)
                 .help("Role of a remote-spawned instance.")
                 .long("role")
+                .takes_value(true)
                 .possible_values(&["sender", "receiver"])
         )
         .arg(
@@ -156,8 +160,8 @@ pub fn configure() -> Result<Configuration, Error> {
                 .takes_value(true)
         )
         .get_matches();
-    let src = Path::new(args.value_of("source").unwrap());
-    let trg = Path::new(args.value_of("target").unwrap());
+    let source = args.value_of("source").map(PathBuf::from);
+    let target = args.value_of("target").map(PathBuf::from);
 
     let mut exclude_patterns = Vec::new();
 
@@ -166,14 +170,15 @@ pub fn configure() -> Result<Configuration, Error> {
             exclude_patterns.push(Pattern::new(pattern).map_err(|pe| Error::new(ErrorKind::Other, pe))?)
         }
     }
+    let role = args.value_of("role");
+    let role = match role {
+        Some("sender") => Some(ProcessRole::Sender),
+        Some("receiver") => Some(ProcessRole::Receiver),
+        _ => None
+    };
 
 
-    if !src.exists() {
-        Err(Error::new(ErrorKind::NotFound, "Source path not available"))
-    } else if !trg.exists() {
-        Err(Error::new(ErrorKind::NotFound, "Target path not available"))
-    } else {
-        Ok(Configuration {
+    Ok(Configuration {
             hash: HashSettings {
                 force_rebuild: args.is_present("rebuild manifest"),
                 mode: if args.value_of("hash-mode").unwrap() == "hash" {
@@ -183,15 +188,10 @@ pub fn configure() -> Result<Configuration, Error> {
                 },
                 exclude_patterns,
             },
-            source: src.into(),
-            target: trg.into(),
-            verbose: args.is_present("verbose"),
-            manifest_path: Path::new(args.value_of("manifest file").unwrap()).into(),
-            role: args.value_of("role").and_then(|st| match st {
-                "sender" => Some(ProcessRole::Sender),
-                "receiver" => Some(ProcessRole::Receiver),
-                _ => None
-            }),
+            source,
+            target,
+            verbose: role.is_none() && args.is_present("verbose"),
+            manifest_path: args.value_of("manifest file").map(PathBuf::from),
+            role,
         })
-    }
 }
