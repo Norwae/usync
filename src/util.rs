@@ -49,9 +49,11 @@ impl SendAdapter {
 
 impl Write for SendAdapter {
     fn write(&mut self, buf: &[u8]) -> Result<usize, Error> {
-        let v = Vec::from(buf);
+        const MAX_TRANSFERABLE_UNIT: usize = 16 << 20;
+        let take = min(MAX_TRANSFERABLE_UNIT, buf.len());
+        let v = Vec::from(&buf[..take]);
         self.0.send(v).map_err(convert_error)?;
-        Ok(buf.len())
+        Ok(take)
     }
 
     fn flush(&mut self) -> Result<(), Error> {
