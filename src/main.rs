@@ -1,53 +1,20 @@
-use std::env::{args, current_exe};
-use std::ffi::OsStr;
 use std::fs::File;
-use std::io::{Error, ErrorKind, Read, stdin, stdout, Write};
-use std::path::PathBuf;
-use std::process::exit;
+use std::io::{Error, Read, stdin, stdout, Write};
 use std::sync::mpsc::channel;
 
-use bincode::Config;
 use memmap2::Mmap;
-use serde::{Deserialize, Serialize};
 
 use crate::config::{Configuration, ProcessRole};
 use crate::tree::Manifest;
 use std::thread;
 use crate::util::{SendAdapter, ReceiveAdapter};
+use crate::file_transfer::*;
+use filetime::FileTime;
 
 mod config;
 mod tree;
 mod util;
 mod file_transfer;
-
-#[derive(Debug,PartialEq,Eq,Serialize,Deserialize)]
-enum Command {
-    End,
-    SendManifest,
-    SendFile(String)
-}
-
-
-fn write_bincoded<W: Write, S: Serialize>(output: &mut W, data: &S) -> Result<(), Error> {
-    let vector = bincode::serialize(data).map_err(util::convert_error)?;
-    write_sized(output, vector)
-}
-
-fn write_sized<W: Write, O : AsRef<[u8]>>(output: &mut W, data: O) -> Result<(), Error> {
-    let r = data.as_ref();
-    output.write_all(&(r.len() as u64).to_le_bytes())?;
-    output.write_all(r)
-}
-
-fn read_sized<R: Read>(input: &mut R) -> Result<Vec<u8>, Error> {
-    let mut length_buffer = [0u8;8];
-    input.read_exact(&mut length_buffer)?;
-    let length = u64::from_le_bytes(length_buffer);
-    let mut v = vec![0u8;length as usize];
-    input.read_exact(v.as_mut_slice())?;
-
-    Ok(v)
-}
 
 fn main_as_sender<R: Read, W: Write>(cfg: &Configuration, mut input: R, mut output: W) -> Result<(), Error> {
     let root = cfg.source();
@@ -69,11 +36,16 @@ fn main_as_sender<R: Read, W: Write>(cfg: &Configuration, mut input: R, mut outp
             }
             Command::SendFile(path) => {
                 let file = root.join(path);
+                let mtime = file.metadata()?.modified()?;
                 let file = File::open(file)?;
                 let map = unsafe {
                     Mmap::map(&file)?
                 };
-                write_sized(&mut output, map)?;
+                let output = &mut output;
+                let mtime = FileTime::from(mtime);
+                write_size(output, mtime.unix_seconds() as u64)?;
+                write_size(output, mtime.nanoseconds() as u64)?;
+                write_sized(output, map)?;
             }
         }
     }
@@ -84,7 +56,10 @@ fn main_as_receiver<R: Read, W: Write>(cfg: &Configuration, mut input: R, mut ou
 
     let local_manifest = Manifest::create_ephemeral(root, false, cfg.hash_settings())?;
     write_bincoded(&mut output, &Command::SendManifest)?;
-    read_manifest(&mut input);
+    let remote_manifest = read_manifest(&mut input)?;
+
+    let mut transmitter = CommandTransmitter::new(root, &mut input, &mut output)?;
+    local_manifest.copy_from(&remote_manifest, &mut transmitter, cfg.verbose())?;
 
     write_bincoded(&mut output, &Command::End)
 }

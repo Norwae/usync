@@ -3,8 +3,6 @@ use std::path::{Path, PathBuf};
 
 use clap::{App, Arg};
 use glob::Pattern;
-use crate::file_transfer::{Transmitter, LocalTransmitter};
-
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ManifestMode {
@@ -92,10 +90,6 @@ impl Configuration {
     #[inline]
     pub fn verbose(&self) -> bool {
         self.verbose
-    }
-
-    pub fn transmitter(&self) -> Box<dyn Transmitter> {
-        Box::new(LocalTransmitter::new(self))
     }
 }
 

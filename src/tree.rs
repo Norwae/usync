@@ -136,13 +136,13 @@ impl DirectoryEntry {
         self.validate0(path, settings).unwrap_or(false)
     }
 
-    fn copy_from(&self, path: &Path, source: &DirectoryEntry, transmitter: &dyn Transmitter, verbose: bool)-> Result<()> {
+    fn copy_from<T: Transmitter>(&self, path: &Path, source: &DirectoryEntry, transmitter: &mut T, verbose: bool)-> Result<()> {
         self.copy_subdirs(path, &source, transmitter, verbose)?;
         self.copy_files(path, &source, transmitter, verbose)?;
         Ok(())
     }
 
-    fn copy_files(&self, path: &Path, source: &DirectoryEntry, transmitter: &dyn Transmitter, verbose: bool) -> Result<()>{
+    fn copy_files<T: Transmitter>(&self, path: &Path, source: &DirectoryEntry, transmitter: &mut T, verbose: bool) -> Result<()>{
         for source_file in &source.files {
             let existing_file = find_named(self.files.as_slice(), &source_file.name);
             let this_path = path.join(&source_file.name);
@@ -168,7 +168,7 @@ impl DirectoryEntry {
         Ok(())
     }
 
-    fn copy_subdirs(&self, path: &Path, source: &DirectoryEntry, transmitter: &dyn Transmitter, verbose: bool) -> Result<()>{
+    fn copy_subdirs<T: Transmitter>(&self, path: &Path, source: &DirectoryEntry, transmitter: &mut T, verbose: bool) -> Result<()>{
         for source_dir in &source.subdirs {
             let existing_subdir = find_named(self.subdirs.as_slice(), &source_dir.name);
             let this_path = path.join(&source_dir.name);
@@ -309,7 +309,7 @@ impl Manifest {
         })
     }
 
-    pub fn copy_from(&self, source: &Manifest, transmitter: &dyn Transmitter, verbose: bool) -> Result<()> {
+    pub fn copy_from<T: Transmitter>(&self, source: &Manifest, transmitter: &mut T, verbose: bool) -> Result<()> {
         let path = PathBuf::new();
         let source = &source.0;
         self.0.copy_from(&path, source, transmitter, verbose)?;

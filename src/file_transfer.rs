@@ -1,83 +1,113 @@
-use std::path::{Path, PathBuf};
-use std::io::{Result, Error, ErrorKind, stdout, Write};
-use memmap2::Mmap;
+use std::path::Path;
+use std::io::{Result, Write, Read, copy};
 use std::fs::File;
 
-use crate::tree::Manifest;
-use crate::config::Configuration;
+use crate::util;
+
+use serde::{Serialize, Deserialize};
+use tempfile::NamedTempFile;
+use filetime::{set_file_mtime, FileTime};
+use std::cmp::min;
+use crate::util::convert_error;
+
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Command {
+    End,
+    SendManifest,
+    SendFile(String),
+}
 
 pub trait Transmitter {
-    fn transmit(&self, path: &Path) -> Result<()>;
-    fn produce_source_manifest(&self, cfg: &Configuration) -> Result<Manifest>;
-    fn produce_target_manifest(&self, cfg: &Configuration) -> Result<Manifest>;
+    fn transmit(&mut self, path: &Path) -> Result<()>;
 }
 
-struct SendingTransmitter {
-    source: PathBuf
+pub fn write_bincoded<W: Write, S: Serialize>(output: &mut W, data: &S) -> Result<()> {
+    let vector = bincode::serialize(data).map_err(util::convert_error)?;
+    write_sized(output, vector)
 }
 
-impl Transmitter for SendingTransmitter {
-    fn transmit(&self, path: &Path) -> Result<()> {
-        let mut out = stdout();
-        let path = self.source.join(path);
-        let file = File::open(path)?;
-        let len = file.metadata()?.len().to_le_bytes();
-        out.write(&len)?;
+pub fn write_sized<W: Write, O: AsRef<[u8]>>(output: &mut W, data: O) -> Result<()> {
+    let r = data.as_ref();
+    write_size(output, r.len() as u64)?;
+    output.write_all(r)
+}
 
-        unsafe {
-            let map = Mmap::map(&file)?;
-            out.write(map.as_ref())?;
-        }
+pub fn write_size<W: Write>(output: &mut W, size: u64) -> Result<()> {
+    output.write_all(&size.to_le_bytes())
+}
+
+pub fn read_size<R: Read>(input: &mut R) -> Result<u64> {
+    let mut length_buffer = [0u8; 8];
+    input.read_exact(&mut length_buffer)?;
+    Ok(u64::from_le_bytes(length_buffer))
+}
+
+pub fn read_sized<R: Read>(input: &mut R) -> Result<Vec<u8>> {
+    let length = read_size(input)?;
+    let mut v = vec![0u8; length as usize];
+    input.read_exact(v.as_mut_slice())?;
+
+    Ok(v)
+}
+
+struct LimitRead<'a, A: Read> {
+    reader: &'a mut A,
+    limit: usize,
+}
+
+impl<A: Read> Read for LimitRead<'_, A> {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+        let m = min(self.limit, buf.len());
+        Ok(if m == 0 {
+            0usize
+        } else {
+            let b2 = &mut buf[..m];
+            let got = self.reader.read(b2)?;
+            self.limit -= got;
+            got as usize
+        })
+    }
+}
+
+pub(crate) struct CommandTransmitter<'a, R: Read, W: Write> {
+    root: &'a Path,
+    input: &'a mut R,
+    output: &'a mut W,
+}
+
+impl<R: Read, W: Write> CommandTransmitter<'_, R, W> {
+    pub fn new<'a>(root: &'a Path, input: &'a mut R, output: &'a mut W) -> Result<CommandTransmitter<'a, R, W>> {
+        Ok(CommandTransmitter { root, input, output })
+    }
+}
+
+impl<'a, R2: Read, W2: Write> Transmitter for CommandTransmitter<'a, R2, W2> {
+    fn transmit(&mut self, path: &Path) -> Result<()> {
+        write_bincoded(self.output, &Command::SendFile(path.to_string_lossy().into()))?;
+        let sec = read_size(self.input)?;
+        let nano = read_size(self.input)?;
+        let size = read_size(self.input)?;
+        let time = FileTime::from_unix_time(sec as i64, nano as u32);
+
+        let path = self.root.join(path);
+        let mut reader = LimitRead { reader: self.input, limit: size as usize };
+        save_copy(&path, &mut reader)?;
+        set_file_mtime(path, time)?;
 
         Ok(())
     }
-
-    fn produce_source_manifest(&self, cfg: &Configuration) -> Result<Manifest> {
-        Manifest::create_persistent(&self.source, cfg.verbose(), cfg.hash_settings(), cfg.manifest_path())
-    }
-
-    fn produce_target_manifest(&self, cfg: &Configuration) -> Result<Manifest> {
-        unimplemented!()
-    }
 }
 
-pub struct LocalTransmitter {
-    source: PathBuf,
-    target: PathBuf
-}
 
-impl LocalTransmitter {
-    pub fn new(cfg: &Configuration) -> LocalTransmitter {
-        LocalTransmitter {
-            source: cfg.source().to_owned(),
-            target: cfg.target().to_owned()
-        }
-    }
-}
-
-impl Transmitter for LocalTransmitter {
-    fn transmit(&self, path: &Path) -> Result<()> {
-        let from = self.source.join(path);
-        let to = self.target.join(path);
-
-        let metadata = from.metadata()?;
-        let time = filetime::FileTime::from_last_modification_time(&metadata);
-        let parent = match to.parent() {
-            None => return Err(Error::new(ErrorKind::NotFound, "Could not create parent directory: No parent")),
-            Some(p) => p,
-        };
-
-        std::fs::create_dir_all(parent)?;
-        std::fs::copy(&from, &to)?;
-        filetime::set_file_mtime(&to, time)?;
-        Ok(())
+fn save_copy<R2: Read>(target: &Path, mut reader: &mut R2) -> Result<()> {
+    let stage_file = NamedTempFile::new_in(&target.parent().unwrap())?;
+    {
+        // make sure file handle is out of scope before renaming
+        let mut file = File::create(&stage_file)?;
+        copy(&mut reader, &mut file)?;
     }
 
-    fn produce_source_manifest(&self, cfg: &Configuration) -> Result<Manifest> {
-        Manifest::create_persistent(&self.source, cfg.verbose(), cfg.hash_settings(), cfg.manifest_path())
-    }
-
-    fn produce_target_manifest(&self, cfg: &Configuration) -> Result<Manifest> {
-        Manifest::create_ephemeral(&self.target, cfg.verbose(), cfg.hash_settings())
-    }
+    stage_file.persist(target).map_err(convert_error)?;
+    Ok(())
 }

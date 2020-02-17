@@ -1,44 +1,43 @@
-use std::sync::mpsc;
 use std::sync::mpsc::{Sender, Receiver};
 use std::io::{Read, Error, Write, ErrorKind};
 use std::cmp::min;
 
-pub trait Named {
-    fn name(&self) -> &str;
+pub fn convert_error<E>(e: E) -> Error where E: Into<Box<dyn std::error::Error+Send+Sync>> {
+    Error::new(ErrorKind::Other, e)
 }
 
 pub struct ReceiveAdapter {
     receiver: Receiver<Vec<u8>>,
-    current: Vec<u8>
+    current: Vec<u8>,
+    current_offset: usize
 }
 
 impl ReceiveAdapter {
     pub fn new(receiver: Receiver<Vec<u8>>) -> ReceiveAdapter {
-        ReceiveAdapter { receiver, current: Vec::new()}
+        ReceiveAdapter { receiver, current: Vec::new(), current_offset: 0usize}
     }
 }
 
 impl Read for ReceiveAdapter {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
-        while self.current.is_empty() {
-            self.current = self.receiver.recv().map_err(convert_error)?
+        while self.current_offset == self.current.len() {
+            self.current = self.receiver.recv().map_err(convert_error)?;
+            self.current_offset = 0usize;
         }
 
         let current = &mut self.current;
-        let take = min(buf.len(), current.len());
-        let src = &current.as_slice()[..take];
+        let remaining = &current.as_slice()[self.current_offset..];
+        let take = min(buf.len(), remaining.len());
+        let src = &remaining[..take];
         buf[..take].copy_from_slice(&src);
-        current.as_mut_slice().copy_within((take..), 0);
-        current.truncate(current.len() - take);
+        self.current_offset += take;
 
         Ok(take)
     }
 }
 
 
-pub fn convert_error<E>(e: E) -> Error where E: Into<Box<dyn std::error::Error+Send+Sync>> {
-    Error::new(ErrorKind::Other, e)
-}
+
 
 pub struct SendAdapter(Sender<Vec<u8>>);
 
@@ -58,6 +57,10 @@ impl Write for SendAdapter {
     fn flush(&mut self) -> Result<(), Error> {
         Ok(())
     }
+}
+
+pub trait Named {
+    fn name(&self) -> &str;
 }
 
 pub fn find_named<T: Named, S : AsRef<str>>(all: &[T], name: S) -> Option<&T> {
