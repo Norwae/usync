@@ -26,8 +26,8 @@ impl Read for ReceiveAdapter {
         }
 
         let current = &mut self.current;
+        let take = min(buf.len(), current.len());
         let remaining = &current.as_slice()[self.current_offset..];
-        let take = min(buf.len(), remaining.len());
         let src = &remaining[..take];
         buf[..take].copy_from_slice(&src);
         self.current_offset += take;
@@ -35,9 +35,6 @@ impl Read for ReceiveAdapter {
         Ok(take)
     }
 }
-
-
-
 
 pub struct SendAdapter(Sender<Vec<u8>>);
 

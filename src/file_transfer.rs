@@ -1,6 +1,6 @@
 use std::path::Path;
 use std::io::{Result, Write, Read};
-use std::fs::{create_dir_all, File};
+use std::fs::create_dir_all;
 
 use crate::util;
 
@@ -9,7 +9,6 @@ use tempfile::NamedTempFile;
 use filetime::{set_file_mtime, FileTime};
 use std::cmp::min;
 use crate::util::convert_error;
-use memmap::MmapMut;
 
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -106,19 +105,11 @@ fn save_copy<R: Read>(target: &Path, reader: &mut R, size: u64) -> Result<()> {
         create_dir_all(parent)?;
     }
 
-    let stage_file = NamedTempFile::new_in(parent)?;
-    write_stream_into_file(reader, size, stage_file.as_file())?;
+    let mut stage_file = NamedTempFile::new_in(parent)?;
+    let mut reader = LimitRead { reader, limit: size as usize };
+
+    std::io::copy(&mut reader, stage_file.as_file_mut())?;
 
     stage_file.persist(target).map_err(convert_error)?;
     Ok(())
-}
-
-fn write_stream_into_file<R: Read>(reader: &mut R, size: u64, stage_file: &File) -> Result<()> {
-    stage_file.set_len(size)?;
-
-    unsafe {
-        let mut mapping = MmapMut::map_mut(stage_file)?;
-        reader.read_exact(mapping.as_mut())?;
-        mapping.flush()
-    }
 }

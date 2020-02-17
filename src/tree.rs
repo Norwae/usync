@@ -1,6 +1,6 @@
 use std::ffi::OsStr;
 use std::fs::{File, read_dir};
-use std::io::{Error, ErrorKind, Read, Result, BufReader, BufWriter};
+use std::io::{Error, ErrorKind, Read, Result, BufReader, BufWriter, empty};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -39,11 +39,7 @@ impl FileEntry {
     fn new(path: &Path, verbose: bool, settings: &HashSettings) -> Result<FileEntry> {
 
         let hash_value = if settings.manifest_mode() == ManifestMode::Hash {
-            unsafe {
-                let file = File::open(path)?;
-                let mmap = memmap::Mmap::map(&file)?;
-                hash(mmap.as_ref())?
-            }
+            hash(File::open(path)?)?
         } else {
             [0u8; 32]
         };
@@ -195,7 +191,7 @@ impl DirectoryEntry {
             modification_time: SystemTime::now(),
             subdirs: Vec::new(),
             files: Vec::new(),
-            hash_value: hash(&[]).unwrap(),
+            hash_value: hash(empty()).unwrap(),
         }
     }
 
@@ -239,7 +235,7 @@ impl DirectoryEntry {
             pb.pop();
         }
 
-        let hash_value = hash(hash_input.as_ref())?;
+        let hash_value = hash(hash_input.as_slice())?;
 
         if verbose {
             println!("Hashed directory {} into {}", pb.to_string_lossy(), hex::encode(&hash_value))
@@ -344,10 +340,15 @@ impl Manifest {
 }
 
 
-fn hash(input: &[u8]) -> Result<ShaSum> {
+fn hash<R: Read>(mut input: R) -> Result<ShaSum> {
     let mut sha256 = Context::new(&SHA256);
     let mut rv: ShaSum = [0u8; 32];
-    sha256.update(input);
+    let mut buffer = [0u8; 1 << 16];
+    let mut received = input.read(&mut buffer)?;
+    while received != 0 {
+        sha256.update(&buffer[..received]);
+        received = input.read(&mut buffer)?;
+    }
     sha256.finish().as_ref().read_exact(&mut rv)?;
     Ok(rv)
 }

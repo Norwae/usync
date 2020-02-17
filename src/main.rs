@@ -8,7 +8,6 @@ use crate::util::{SendAdapter, ReceiveAdapter};
 use crate::file_transfer::*;
 use std::thread;
 use filetime::FileTime;
-use memmap::Mmap;
 
 mod config;
 mod tree;
@@ -37,16 +36,16 @@ fn main_as_sender<R: Read, W: Write>(cfg: &Configuration, input: R, output: W) -
             }
             Command::SendFile(path) => {
                 let file = root.join(path);
-                let mtime = file.metadata()?.modified()?;
-                let file = File::open(file)?;
-                let map = unsafe {
-                    Mmap::map(&file)?
-                };
+                let meta = file.metadata()?;
+                let size = meta.len();
+                let mtime = meta.modified()?;
+                let mut file = File::open(file)?;
                 let output = &mut output;
                 let mtime = FileTime::from(mtime);
                 write_size(output, mtime.unix_seconds() as u64)?;
                 write_size(output, mtime.nanoseconds() as u64)?;
-                write_sized(output, map)?;
+                write_size(output, size)?;
+                std::io::copy(&mut file, output)?;
             }
         }
 
