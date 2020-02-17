@@ -282,7 +282,7 @@ impl Manifest {
             println!("Resolved manifest path to {}", manifest_path.as_path().to_string_lossy());
         }
 
-        let mut res = Manifest::_load(manifest_path.as_path(), &settings);
+        let mut res = Manifest::load(manifest_path.as_path(), &settings);
         if res.is_ok() {
             let m = res.as_ref().unwrap();
             if !m.0.validate(&mut PathBuf::from(root.as_ref()), &settings) {
@@ -298,7 +298,7 @@ impl Manifest {
             de.and_then(|e| {
                 let manifest = Manifest(e);
 
-                manifest._save(verbose, &manifest_path)?;
+                manifest.save(verbose, &manifest_path)?;
 
                 Ok(manifest)
             })
@@ -313,7 +313,7 @@ impl Manifest {
         Ok(())
     }
 
-    fn _save(&self, verbose: bool, manifest_path: &Path) -> Result<()> {
+    fn save(&self, verbose: bool, manifest_path: &Path) -> Result<()> {
         if verbose {
             println!("Opening file {} for saving manifest", manifest_path.to_string_lossy());
         }
@@ -329,7 +329,7 @@ impl Manifest {
         Ok(())
     }
 
-    fn _load<S: AsRef<Path>>(file: S, cfg: &HashSettings) -> Result<Manifest> {
+    fn load<S: AsRef<Path>>(file: S, cfg: &HashSettings) -> Result<Manifest> {
         if cfg.force_rebuild() {
             return Err(Error::new(ErrorKind::Other, "Forced rebuild of manifest"));
         }
