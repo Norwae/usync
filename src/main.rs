@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{Error, Read, Write, stdin, stdout};
+use std::io::{Error, Read, Write, stdin, stdout, BufWriter, BufReader};
 use std::sync::mpsc::channel;
 
 use crate::config::{Configuration, ProcessRole};
@@ -15,13 +15,15 @@ mod tree;
 mod util;
 mod file_transfer;
 
-fn main_as_sender<R: Read, W: Write>(cfg: &Configuration, mut input: R, mut output: W) -> Result<(), Error> {
+fn main_as_sender<R: Read, W: Write>(cfg: &Configuration, input: R, output: W) -> Result<(), Error> {
     let root = cfg.source();
     let manifest = Manifest::create_persistent(
         root,
         false,
         cfg.hash_settings(),
         cfg.manifest_path())?;
+    let mut output = BufWriter::new(output);
+    let mut input = BufReader::new(input);
 
     loop {
         let command_buffer: Vec<u8> = read_sized(&mut input)?;
@@ -47,6 +49,8 @@ fn main_as_sender<R: Read, W: Write>(cfg: &Configuration, mut input: R, mut outp
                 write_sized(output, map)?;
             }
         }
+
+        output.flush()?;
     }
 }
 

@@ -1,6 +1,6 @@
 use std::path::Path;
 use std::io::{Result, Write, Read};
-use std::fs::{OpenOptions, create_dir_all, File};
+use std::fs::{create_dir_all, File};
 
 use crate::util;
 
