@@ -25,8 +25,8 @@ fn main_as_sender<R: Read, W: Write>(cfg: &Configuration, input: R, output: W) -
     let mut input = BufReader::new(input);
 
     loop {
-        let command_buffer: Vec<u8> = read_sized(&mut input)?;
-        let next = bincode::deserialize(command_buffer.as_slice()).map_err(util::convert_error)?;
+
+        let next = read_command(&mut input)?;
         match next {
             Command::End => {
                 return Ok(())
@@ -66,8 +66,13 @@ fn main_as_receiver<R: Read, W: Write>(cfg: &Configuration, mut input: R, mut ou
     write_bincoded(&mut output, &Command::End)
 }
 
-fn read_manifest<R: Read>(mut input: &mut R) -> Result<Manifest, Error> {
-    let remote_manifest = read_sized(&mut input)?;
+fn read_command<R: Read>(input: &mut R) -> Result<Command, Error> {
+    let command_buffer = read_sized(input)?;
+    bincode::deserialize(command_buffer.as_slice()).map_err(util::convert_error)
+}
+
+fn read_manifest<R: Read>(input: &mut R) -> Result<Manifest, Error> {
+    let remote_manifest = read_sized(input)?;
     bincode::deserialize(remote_manifest.as_slice()).map_err(util::convert_error)
 }
 
