@@ -343,7 +343,7 @@ impl Manifest {
 fn hash<R: Read>(mut input: R) -> Result<ShaSum> {
     let mut sha256 = Context::new(&SHA256);
     let mut rv: ShaSum = [0u8; 32];
-    let mut buffer = [0u8; 1 << 16];
+    let mut buffer = [0u8; 65536];
     let mut received = input.read(&mut buffer)?;
     while received != 0 {
         sha256.update(&buffer[..received]);
