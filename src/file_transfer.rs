@@ -9,6 +9,7 @@ use tempfile::NamedTempFile;
 use filetime::{set_file_mtime, FileTime};
 use std::cmp::min;
 use crate::util::convert_error;
+use serde::de::DeserializeOwned;
 
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,6 +22,13 @@ pub enum Command {
 pub trait Transmitter {
     fn transmit(&mut self, path: &Path) -> Result<()>;
 }
+
+
+pub fn read_bincoded<R: Read, C: DeserializeOwned>(input: &mut R) -> Result<C> {
+    let command_buffer = read_sized(input)?;
+    bincode::deserialize(command_buffer.as_slice()).map_err(util::convert_error)
+}
+
 
 pub fn write_bincoded<W: Write, S: Serialize>(output: &mut W, data: &S) -> Result<()> {
     let vector = bincode::serialize(data).map_err(util::convert_error)?;

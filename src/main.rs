@@ -26,7 +26,7 @@ fn main_as_sender<R: Read, W: Write>(cfg: &Configuration, input: R, output: W) -
 
     loop {
 
-        let next = read_command(&mut input)?;
+        let next = read_bincoded(&mut input)?;
         match next {
             Command::End => {
                 return Ok(())
@@ -58,22 +58,12 @@ fn main_as_receiver<R: Read, W: Write>(cfg: &Configuration, mut input: R, mut ou
 
     let local_manifest = Manifest::create_ephemeral(root, false, cfg.hash_settings())?;
     write_bincoded(&mut output, &Command::SendManifest)?;
-    let remote_manifest = read_manifest(&mut input)?;
+    let remote_manifest = read_bincoded(&mut input)?;
 
     let mut transmitter = CommandTransmitter::new(root, &mut input, &mut output)?;
     local_manifest.copy_from(&remote_manifest, &mut transmitter, cfg.verbose())?;
 
     write_bincoded(&mut output, &Command::End)
-}
-
-fn read_command<R: Read>(input: &mut R) -> Result<Command, Error> {
-    let command_buffer = read_sized(input)?;
-    bincode::deserialize(command_buffer.as_slice()).map_err(util::convert_error)
-}
-
-fn read_manifest<R: Read>(input: &mut R) -> Result<Manifest, Error> {
-    let remote_manifest = read_sized(input)?;
-    bincode::deserialize(remote_manifest.as_slice()).map_err(util::convert_error)
 }
 
 fn main_as_controller(cfg: &Configuration) -> Result<(), Error> {
