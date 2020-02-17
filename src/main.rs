@@ -1,15 +1,19 @@
-use std::io::{Error, stdin, stdout, ErrorKind, Write, Read};
+use std::env::{args, current_exe};
+use std::ffi::OsStr;
+use std::fs::File;
+use std::io::{Error, ErrorKind, Read, stdin, stdout, Write};
+use std::path::PathBuf;
 use std::process::exit;
+use std::sync::mpsc::channel;
 
 use bincode::Config;
-
-use serde::{Serialize, Deserialize};
+use memmap2::Mmap;
+use serde::{Deserialize, Serialize};
 
 use crate::config::{Configuration, ProcessRole};
-use std::path::PathBuf;
 use crate::tree::Manifest;
-use memmap2::Mmap;
-use std::fs::File;
+use std::thread;
+use crate::util::{SendAdapter, ReceiveAdapter};
 
 mod config;
 mod tree;
@@ -23,8 +27,9 @@ enum Command {
     SendFile(String)
 }
 
+
 fn write_bincoded<W: Write, S: Serialize>(output: &mut W, data: &S) -> Result<(), Error> {
-    let vector = bincode::serialize(data)?;
+    let vector = bincode::serialize(data).map_err(util::convert_error)?;
     write_sized(output, vector)
 }
 
@@ -38,7 +43,7 @@ fn read_sized<R: Read>(input: &mut R) -> Result<Vec<u8>, Error> {
     let mut length_buffer = [0u8;8];
     input.read_exact(&mut length_buffer)?;
     let length = u64::from_le_bytes(length_buffer);
-    let mut v = Vec::with_capacity(length as usize);
+    let mut v = vec![0u8;length as usize];
     input.read_exact(v.as_mut_slice())?;
 
     Ok(v)
@@ -51,15 +56,16 @@ fn main_as_sender<R: Read, W: Write>(cfg: &Configuration, mut input: R, mut outp
         false,
         cfg.hash_settings(),
         cfg.manifest_path())?;
-    let convert_error = |e| Error::new(ErrorKind::Other, e);
 
     loop {
         let command_buffer: Vec<u8> = read_sized(&mut input)?;
-        let next = bincode::deserialize(command_buffer.as_slice()).map_err(convert_error)?;
+        let next = bincode::deserialize(command_buffer.as_slice()).map_err(util::convert_error)?;
         match next {
-            Command::End => return Ok(()),
+            Command::End => {
+                return Ok(())
+            },
             Command::SendManifest => {
-                write_bincoded(&mut output, &manifest);
+                write_bincoded(&mut output, &manifest)?;
             }
             Command::SendFile(path) => {
                 let file = root.join(path);
@@ -76,18 +82,44 @@ fn main_as_sender<R: Read, W: Write>(cfg: &Configuration, mut input: R, mut outp
 fn main_as_receiver<R: Read, W: Write>(cfg: &Configuration, mut input: R, mut output: W) -> Result<(), Error> {
     let root = cfg.target();
 
-    let manifest = Manifest::create_ephemeral(root, false, cfg.hash_settings())?;
+    let local_manifest = Manifest::create_ephemeral(root, false, cfg.hash_settings())?;
     write_bincoded(&mut output, &Command::SendManifest)?;
+    read_manifest(&mut input);
 
     write_bincoded(&mut output, &Command::End)
 }
 
-fn main_as_controller(cfg: &Configuration) -> Result<(), Error> {
-    let transmitter = cfg.transmitter();
+fn read_manifest<R: Read>(mut input: &mut R) -> Result<Manifest, Error> {
+    let remote_manifest = read_sized(&mut input)?;
+    bincode::deserialize(remote_manifest.as_slice()).map_err(util::convert_error)
+}
 
-    let source = transmitter.produce_source_manifest(&cfg)?;
-    let destination = transmitter.produce_target_manifest(&cfg)?;
-    destination.copy_from(&source, transmitter.as_ref(), cfg.verbose())?;
+fn main_as_controller(cfg: &Configuration) -> Result<(), Error> {
+    let c1 = cfg.clone();
+    let c2 = cfg.clone();
+    let (send_to_receiver, receive_from_sender) = channel();
+    let (send_to_sender, receive_from_receiver) = channel();
+
+    let sender = thread::spawn(move || {
+        let output = SendAdapter::new(send_to_receiver);
+        let input = ReceiveAdapter::new(receive_from_receiver);
+
+        main_as_sender(&c1, input, output).unwrap_or_else(|e|{
+            println!("Sender failed with: {}", e);
+        });
+    });
+
+    let receiver = thread::spawn(move || {
+        let output = SendAdapter::new(send_to_sender);
+        let input = ReceiveAdapter::new(receive_from_sender);
+
+        main_as_receiver(&c2, input, output).unwrap_or_else(|e| {
+            println!("Receive failed: {}", e)
+        });
+    });
+
+    sender.join().unwrap();
+    receiver.join().unwrap();
     Ok(())
 }
 
@@ -97,7 +129,7 @@ fn main() -> Result<(), Error> {
         Some(ProcessRole::Sender) =>
             main_as_sender(&cfg, stdin(), stdout()),
         Some(ProcessRole::Receiver) =>
-            main_as_receiver(&cfg),
+            main_as_receiver(&cfg, stdin(), stdout()),
         _ =>
             main_as_controller(&cfg)
     }
