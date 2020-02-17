@@ -1,6 +1,6 @@
 use std::ffi::OsStr;
 use std::fs::{File, read_dir};
-use std::io::{Error, ErrorKind, Read, Result};
+use std::io::{Error, ErrorKind, Read, Result, BufReader, BufWriter};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -41,7 +41,7 @@ impl FileEntry {
         let hash_value = if settings.manifest_mode() == ManifestMode::Hash {
             unsafe {
                 let file = File::open(path)?;
-                let mmap = memmap2::Mmap::map(&file)?;
+                let mmap = memmap::Mmap::map(&file)?;
                 hash(mmap.as_ref())?
             }
         } else {
@@ -323,7 +323,7 @@ impl Manifest {
         }
 
         let file = File::create(manifest_path)?;
-        let r = bincode::serialize_into(file, self);
+        let r = bincode::serialize_into(BufWriter::new(file), self);
         r.map_err(|e| Error::new(ErrorKind::Other, e))?;
 
         if verbose {
@@ -338,7 +338,7 @@ impl Manifest {
             return Err(Error::new(ErrorKind::Other, "Forced rebuild of manifest"));
         }
         let file = File::open(file)?;
-        bincode::deserialize_from(file)
+        bincode::deserialize_from(BufReader::new(file))
             .map_err(|e| Error::new(ErrorKind::Other, e))
     }
 }

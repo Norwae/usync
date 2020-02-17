@@ -1,15 +1,14 @@
 use std::fs::File;
-use std::io::{Error, Read, stdin, stdout, Write};
+use std::io::{Error, Read, Write, stdin, stdout};
 use std::sync::mpsc::channel;
-
-use memmap2::Mmap;
 
 use crate::config::{Configuration, ProcessRole};
 use crate::tree::Manifest;
-use std::thread;
 use crate::util::{SendAdapter, ReceiveAdapter};
 use crate::file_transfer::*;
+use std::thread;
 use filetime::FileTime;
+use memmap::Mmap;
 
 mod config;
 mod tree;

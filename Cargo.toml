@@ -11,7 +11,7 @@ edition = "2018"
 clap = "2.31.2"         # Command line argument handling
 ring = "0.16.9"         # Hashing
 hex = "0.4.0"           # Hex codec
-memmap2 = "0.1.0"       # mmap() for hashing
+memmap = "0.7.0"
 serde = {version = "1.0.104", features = ["derive"]}
                         # persistence of manifests
 bincode = "1.2.1"       # binary codec for serde

@@ -1,6 +1,6 @@
 use std::path::Path;
-use std::io::{Result, Write, Read, copy};
-use std::fs::File;
+use std::io::{Result, Write, Read};
+use std::fs::{OpenOptions, create_dir_all, File};
 
 use crate::util;
 
@@ -9,6 +9,7 @@ use tempfile::NamedTempFile;
 use filetime::{set_file_mtime, FileTime};
 use std::cmp::min;
 use crate::util::convert_error;
+use memmap::MmapMut;
 
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,8 +92,7 @@ impl<'a, R2: Read, W2: Write> Transmitter for CommandTransmitter<'a, R2, W2> {
         let time = FileTime::from_unix_time(sec as i64, nano as u32);
 
         let path = self.root.join(path);
-        let mut reader = LimitRead { reader: self.input, limit: size as usize };
-        save_copy(&path, &mut reader)?;
+        save_copy(&path, &mut self.input, size)?;
         set_file_mtime(path, time)?;
 
         Ok(())
@@ -100,14 +100,25 @@ impl<'a, R2: Read, W2: Write> Transmitter for CommandTransmitter<'a, R2, W2> {
 }
 
 
-fn save_copy<R2: Read>(target: &Path, mut reader: &mut R2) -> Result<()> {
-    let stage_file = NamedTempFile::new_in(&target.parent().unwrap())?;
-    {
-        // make sure file handle is out of scope before renaming
-        let mut file = File::create(&stage_file)?;
-        copy(&mut reader, &mut file)?;
+fn save_copy<R: Read>(target: &Path, reader: &mut R, size: u64) -> Result<()> {
+    let parent = target.parent().unwrap();
+    if !parent.exists() {
+        create_dir_all(parent)?;
     }
+
+    let stage_file = NamedTempFile::new_in(parent)?;
+    write_stream_into_file(reader, size, stage_file.as_file())?;
 
     stage_file.persist(target).map_err(convert_error)?;
     Ok(())
+}
+
+fn write_stream_into_file<R: Read>(reader: &mut R, size: u64, stage_file: &File) -> Result<()> {
+    stage_file.set_len(size)?;
+
+    unsafe {
+        let mut mapping = MmapMut::map_mut(stage_file)?;
+        reader.read_exact(mapping.as_mut())?;
+        mapping.flush()
+    }
 }
