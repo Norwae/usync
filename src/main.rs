@@ -18,36 +18,6 @@ mod util;
 mod file_transfer;
 
 
-fn command_handler_loop<R: Read, W: Write, RW: ReadWrite<R, W>>(root: &Path, manifest: &Manifest, mut io: RW) -> Result<(), Error> {
-
-    loop {
-        let next = read_bincoded(io.as_reader())?;
-        match next {
-            Command::End => {
-                return Ok(())
-            },
-            Command::SendManifest => {
-                write_bincoded(io.as_writer(), &manifest)?;
-            }
-            Command::SendFile(path) => {
-                let file = root.join(path);
-                let meta = file.metadata()?;
-                let size = meta.len();
-                let mtime = meta.modified()?;
-                let mut file = File::open(file)?;
-                let output = io.as_writer();
-                let mtime = FileTime::from(mtime);
-                write_size(output, mtime.unix_seconds() as u64)?;
-                write_size(output, mtime.nanoseconds() as u64)?;
-                write_size(output, size)?;
-                std::io::copy(&mut file, output)?;
-            }
-        }
-
-        io.as_writer().flush()?;
-    }
-}
-
 fn main_as_server(cfg: &Configuration) -> Result<(), Error> { // ! would be better, but hey...
     let manifest =
         Manifest::create_persistent(cfg.source(), cfg.verbose(), cfg.hash_settings(), cfg.manifest_path())?;
@@ -106,6 +76,10 @@ fn main_as_controller(cfg: &Configuration) -> Result<(), Error> {
         return main_as_receiver(cfg, remote);
     }
 
+    if !cfg.force_pipeline() {
+        return main_as_local(cfg);
+    }
+
     let c1 = cfg.clone();
     let c2 = cfg.clone();
     let (send_to_receiver, receive_from_sender) = channel();
@@ -132,6 +106,14 @@ fn main_as_controller(cfg: &Configuration) -> Result<(), Error> {
     sender.join().unwrap();
     receiver.join().unwrap();
     Ok(())
+}
+
+fn main_as_local(cfg: &Configuration) -> Result<(), Error> {
+    let to = PathBuf::from(cfg.target());
+    let from = PathBuf::from(cfg.source());
+    let target = Manifest::create_ephemeral(&to, cfg.verbose(), cfg.hash_settings())?;
+    let src = Manifest::create_persistent(&from, cfg.verbose(), cfg.hash_settings(), cfg.manifest_path())?;
+    target.copy_from(&src, &mut LocalTransmitter::new(&from, &to), cfg.verbose())
 }
 
 fn main() -> Result<(), Error> {

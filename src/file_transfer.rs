@@ -1,6 +1,6 @@
 use std::path::Path;
 use std::io::{Result, Write, Read, Error, ErrorKind};
-use std::fs::create_dir_all;
+use std::fs::{create_dir_all, File};
 
 use crate::util;
 
@@ -11,6 +11,7 @@ use std::cmp::min;
 use crate::util::{convert_error, ReadWrite};
 use serde::de::DeserializeOwned;
 use serde::export::PhantomData;
+use crate::tree::Manifest;
 
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,6 +23,27 @@ pub enum Command {
 
 pub trait Transmitter {
     fn transmit(&mut self, path: &Path) -> Result<()>;
+}
+
+pub struct LocalTransmitter<'a> {
+    source: &'a Path,
+    target: &'a Path
+}
+
+impl LocalTransmitter<'_> {
+    pub fn new<'a> (from: &'a Path, to: &'a Path) -> LocalTransmitter<'a> {
+        LocalTransmitter {
+            source: from,
+            target: to
+        }
+    }
+}
+
+impl Transmitter for LocalTransmitter<'_> {
+    fn transmit(&mut self, path: &Path) -> Result<()> {
+        std::fs::copy(&self.source.join(path), &self.target.join(path))?;
+        Ok(())
+    }
 }
 
 
@@ -100,7 +122,36 @@ impl<R: Read, W: Write, RW: ReadWrite<R, W>> CommandTransmitter<'_, R, W, RW> {
             p2: PhantomData
         }
     }
+}
 
+
+pub(crate) fn command_handler_loop<R: Read, W: Write, RW: ReadWrite<R, W>>(root: &Path, manifest: &Manifest, mut io: RW) -> Result<()> {
+    loop {
+        let next = read_bincoded(io.as_reader())?;
+        match next {
+            Command::End => {
+                return Ok(())
+            },
+            Command::SendManifest => {
+                write_bincoded(io.as_writer(), &manifest)?;
+            }
+            Command::SendFile(path) => {
+                let file = root.join(path);
+                let meta = file.metadata()?;
+                let size = meta.len();
+                let mtime = meta.modified()?;
+                let mut file = File::open(file)?;
+                let output = io.as_writer();
+                let mtime = FileTime::from(mtime);
+                write_size(output, mtime.unix_seconds() as u64)?;
+                write_size(output, mtime.nanoseconds() as u64)?;
+                write_size(output, size)?;
+                std::io::copy(&mut file, output)?;
+            }
+        }
+
+        io.as_writer().flush()?;
+    }
 }
 
 impl<'a, R: Read, W: Write, RW: ReadWrite<R, W>> Transmitter for CommandTransmitter<'a, R, W, RW> {

@@ -32,7 +32,8 @@ pub struct Configuration {
     verbose: bool,
     hash: HashSettings,
     manifest_path: Option<PathBuf>,
-    server_port: Option<u16>
+    server_port: Option<u16>,
+    force_pipeline: bool
 }
 
 impl HashSettings {
@@ -65,6 +66,11 @@ impl HashSettings {
 }
 
 impl Configuration {
+    #[inline]
+    pub fn force_pipeline(&self) -> bool {
+        self.force_pipeline
+    }
+
     #[inline]
     pub fn server_port(&self) -> u16 {
         self.server_port.unwrap()
@@ -106,6 +112,10 @@ pub fn configure() -> Result<Configuration, Error> {
     let args = App::new("usync")
         .version("1.0")
         .author("Elisabeth 'TerraNova' Schulz")
+        .arg(Arg::with_name("force-pipeline")
+            .hidden(true)
+            .long("force-pipeline")
+        )
         .arg(
             Arg::with_name("rebuild manifest")
                 .help("rebuild the required manifest(s), even if it already exists")
@@ -209,6 +219,7 @@ pub fn configure() -> Result<Configuration, Error> {
             verbose: (role == Some(ProcessRole::Server) || role.is_none()) && args.is_present("verbose"),
             manifest_path: args.value_of("manifest file").map(PathBuf::from),
             role,
-            server_port
+            server_port,
+            force_pipeline: args.is_present("force-pipeline")
         })
 }
