@@ -1,7 +1,7 @@
 use std::io::{Error, Read, Write, stdin, stdout, ErrorKind};
 use std::sync::mpsc::channel;
 
-use crate::config::{Configuration, ProcessRole};
+use crate::config::{Configuration, ProcessRole, PathDefinition};
 use crate::tree::Manifest;
 use crate::util::*;
 use crate::file_transfer::*;
@@ -17,64 +17,83 @@ mod tree;
 mod util;
 mod file_transfer;
 
+fn non_local_path<A>(path: &PathDefinition) -> Result<A, Error> {
+    Err(Error::new(ErrorKind::Other, format!("Non-local path where local context is required: {}", path)))
+}
 
 fn main_as_server(cfg: &Configuration) -> Result<(), Error> { // ! would be better, but hey...
-    let manifest =
-        Manifest::create_persistent(cfg.source(), cfg.verbose(), cfg.hash_settings(), cfg.manifest_path())?;
-    let manifest = Arc::new(manifest);
-    let server_port = TcpListener::bind(format!("0.0.0.0:{}", cfg.server_port()))?;
+    if let PathDefinition::Local(root) = cfg.source() {
+        let manifest =
+            Manifest::create_persistent(root, cfg.verbose(), cfg.hash_settings(), cfg.manifest_path())?;
+        let manifest = Arc::new(manifest);
+        let server_port = TcpListener::bind(format!("0.0.0.0:{}", cfg.server_port()))?;
 
-    loop {
-        let verbose = cfg.verbose();
-        let (conn, sa) = server_port.accept()?;
-        let manifest = manifest.clone();
-        let root = PathBuf::from(cfg.source());
-        if verbose {
-            println!("Accepted connection {}", sa);
-        }
-        thread::spawn(move || {
-            match command_handler_loop(&root, &manifest, conn) {
-                Ok(_) => if verbose {
-                    println!("Finished sending to {}", sa)
-                },
-                Err(err) => eprintln!("Command loop failed for {} with {}", sa, err),
+        loop {
+            let verbose = cfg.verbose();
+            let (conn, sa) = server_port.accept()?;
+            let manifest = manifest.clone();
+            let root = PathBuf::from(root);
+            if verbose {
+                println!("Accepted connection {}", sa);
             }
-        });
+            thread::spawn(move || {
+                match command_handler_loop(&root, &manifest, conn) {
+                    Ok(_) => if verbose {
+                        println!("Finished sending to {}", sa)
+                    },
+                    Err(err) => eprintln!("Command loop failed for {} with {}", sa, err),
+                }
+            });
+        }
+    } else {
+        non_local_path(cfg.source())
     }
+
 }
 
 
 
 fn main_as_sender<R: Read, W: Write, RW: ReadWrite<R, W>>(cfg: &Configuration, io: RW) -> Result<(), Error> {
-    let root = PathBuf::from(cfg.source());
-    let manifest = Manifest::create_persistent(
-        &root,
-        false,
-        cfg.hash_settings(),
-        cfg.manifest_path())?;
+    if let PathDefinition::Local(root) = cfg.source() {
+        let manifest = Manifest::create_persistent(
+            &root,
+            false,
+            cfg.hash_settings(),
+            cfg.manifest_path())?;
 
-    command_handler_loop(&root, &manifest, io)
+        command_handler_loop(&root, &manifest, io)
+    } else {
+        non_local_path(cfg.source())
+    }
 }
 
 fn main_as_receiver<R: Read, W: Write, RW: ReadWrite<R, W>>(cfg: &Configuration, mut io: RW) -> Result<(), Error> {
-    let root = PathBuf::from(cfg.target());
+    if let PathDefinition::Local(root) = cfg.target() {
+        let local_manifest = Manifest::create_ephemeral(&root, false, cfg.hash_settings())?;
+        write_bincoded(io.as_writer(), &Command::SendManifest)?;
+        let remote_manifest = read_bincoded(io.as_reader())?;
 
-    let local_manifest = Manifest::create_ephemeral(&root, false, cfg.hash_settings())?;
-    write_bincoded(io.as_writer(), &Command::SendManifest)?;
-    let remote_manifest = read_bincoded(io.as_reader())?;
+        let mut transmitter = CommandTransmitter::new(&root, &mut io);
+        local_manifest.copy_from(&remote_manifest, &mut transmitter, cfg.verbose())?;
 
-    let mut transmitter = CommandTransmitter::new(&root, &mut io);
-    local_manifest.copy_from(&remote_manifest, &mut transmitter, cfg.verbose())?;
-
-    write_bincoded(io.as_writer(), &Command::End)
+        write_bincoded(io.as_writer(), &Command::End)
+    } else {
+        non_local_path(cfg.target())
+    }
 }
 
 fn main_as_local(cfg: &Configuration) -> Result<(), Error> {
-    let to = PathBuf::from(cfg.target());
-    let from = PathBuf::from(cfg.source());
-    let target = Manifest::create_ephemeral(&to, cfg.verbose(), cfg.hash_settings())?;
-    let src = Manifest::create_persistent(&from, cfg.verbose(), cfg.hash_settings(), cfg.manifest_path())?;
-    target.copy_from(&src, &mut LocalTransmitter::new(&from, &to), cfg.verbose())
+    if let PathDefinition::Local(to) = cfg.target() {
+        if let PathDefinition::Local(from) = cfg.source() {
+            let target = Manifest::create_ephemeral(&to, cfg.verbose(), cfg.hash_settings())?;
+            let src = Manifest::create_persistent(&from, cfg.verbose(), cfg.hash_settings(), cfg.manifest_path())?;
+            target.copy_from(&src, &mut LocalTransmitter::new(&from, &to), cfg.verbose())
+        } else {
+            non_local_path(cfg.source())
+        }
+    } else {
+        non_local_path(cfg.target())
+    }
 }
 
 fn main_as_local_pipe(cfg: &Configuration) -> Result<(), Error> {
@@ -136,45 +155,35 @@ fn build_command(cfg: &Configuration, role: &str, remote: &str, target_param: &s
 fn main_as_controller(cfg: &Configuration) -> Result<(), Error> {
     let src = cfg.source();
     let trg = cfg.target();
-    if src.starts_with("server://") {
-        let remote = &src[9..];
-        let remote = TcpStream::connect(remote)?;
-        return main_as_receiver(cfg, remote);
-    }
-    if src.starts_with("remote://") {
-        if trg.starts_with("remote://") {
-            return Err(Error::new(ErrorKind::Other, "Both sides are remote"))
+
+    match (src, trg) {
+        (PathDefinition::Local(_), PathDefinition::Local(_)) => {
+            if cfg.force_pipeline() {
+                main_as_local_pipe(cfg)
+            } else {
+                main_as_local(cfg)
+            }
+        },
+        (PathDefinition::Server(remote), PathDefinition::Local(_)) => {
+            let stream = TcpStream::connect(remote)?;
+            main_as_receiver(cfg, stream)
         }
-
-        let (remote, remote_path) = parse_remote(&src);
-        let mut cmd = build_command(cfg, "sender", remote, "--source", remote_path);
-        let proc = cmd.spawn()?;
-        let io = CombineReadWrite::new(proc.stdout.unwrap(), proc.stdin.unwrap());
-        return main_as_receiver(cfg, io);
+        (PathDefinition::Remote(remote, remote_path), PathDefinition::Local(_)) => {
+            let mut cmd = build_command(cfg, "sender", remote, "--source", remote_path);
+            let proc = cmd.spawn()?;
+            let io = CombineReadWrite::new(proc.stdout.unwrap(), proc.stdin.unwrap());
+            main_as_receiver(cfg, io)
+        }
+        (PathDefinition::Local(_), PathDefinition::Remote(remote, remote_path)) => {
+            let mut cmd = build_command(cfg, "receiver", remote, "--target", remote_path);
+            let proc = cmd.spawn()?;
+            let io = CombineReadWrite::new(proc.stdout.unwrap(), proc.stdin.unwrap());
+            main_as_sender(cfg, io)
+        }
+        _ => Err(Error::new(ErrorKind::Other, format!("Unsupported combination of paths: {} vs {}", src, trg)))
     }
-
-    if trg.starts_with("remote://") {
-        let (remote, remote_path) = parse_remote(&trg);
-        let mut cmd = build_command(cfg, "receiver", remote, "--target", remote_path);
-        let proc = cmd.spawn()?;
-        let io = CombineReadWrite::new(proc.stdout.unwrap(), proc.stdin.unwrap());
-        return main_as_sender(cfg, io);
-    }
-
-    if !cfg.force_pipeline() {
-        return main_as_local(cfg);
-    }
-
-    main_as_local_pipe(cfg)
 }
 
-fn parse_remote(src: &str) -> (&str, &str) {
-    let src = &src[9..];
-    let next_slash = src.find("/").unwrap();
-    let remote = &src[.. next_slash];
-    let remote_path = &src[next_slash+1 ..];
-    (remote, remote_path)
-}
 
 
 fn main() -> Result<(), Error> {

@@ -6,6 +6,46 @@ use glob::Pattern;
 use crate::config::ManifestMode::TimestampTest;
 use std::fmt::Display;
 use serde::export::Formatter;
+use crate::config::PathDefinition::{Remote, Local, Server};
+
+#[derive(Debug,Clone,PartialEq,Eq)]
+pub enum PathDefinition {
+    Local(PathBuf),
+    Server(String),
+    Remote(String, String)
+}
+
+impl Display for PathDefinition {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::result::Result<(), std::fmt::Error> {
+        match self {
+            Local(pb) => {
+                f.write_str(&format!("Local({})", pb.to_string_lossy()))
+            },
+            Server(s) => {
+                f.write_str(&format!("Server({})", s))
+            },
+            Remote(host, path) => {
+                f.write_str(&format!("Remote(host={},path={})", host, path))
+            },
+        }
+    }
+}
+
+impl PathDefinition {
+    fn parse(string: &str) -> PathDefinition {
+        if string.starts_with("remote://") {
+            let src = &string[9..];
+            let next_slash = src.find("/").unwrap();
+            let remote = &src[.. next_slash];
+            let remote_path = &src[next_slash+1 ..];
+            Remote(String::from(remote), String::from(remote_path))
+        } else if string.starts_with("server://") {
+            Server(String::from(&string[9..]))
+        } else {
+            Local(PathBuf::from(string))
+        }
+    }
+}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ManifestMode {
@@ -41,8 +81,8 @@ pub struct HashSettings {
 #[derive(Debug, Clone)]
 pub struct Configuration {
     role: Option<ProcessRole>,
-    source: Option<String>,
-    target: Option<String>,
+    source: Option<PathDefinition>,
+    target: Option<PathDefinition>,
     verbose: bool,
     hash: HashSettings,
     manifest_path: Option<PathBuf>,
@@ -108,12 +148,12 @@ impl Configuration {
 
 
     #[inline]
-    pub fn target(&self) -> &str {
+    pub fn target(&self) -> &PathDefinition {
         &self.target.as_ref().unwrap()
     }
 
     #[inline]
-    pub fn source(&self) -> &str {
+    pub fn source(&self) -> &PathDefinition {
         &self.source.as_ref().unwrap()
     }
 
@@ -199,8 +239,8 @@ pub fn configure() -> Result<Configuration, Error> {
                 .takes_value(true)
         )
         .get_matches();
-    let source = args.value_of("source").map(String::from);
-    let target = args.value_of("target").map(String::from);
+    let source = args.value_of("source").map(PathDefinition::parse);
+    let target = args.value_of("target").map(PathDefinition::parse);
     let server_port = args.value_of("server-port").and_then(|v| {
         return match v.parse::<u16>() {
             Ok(v) => Some(v),
