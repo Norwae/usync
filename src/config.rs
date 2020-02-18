@@ -27,8 +27,8 @@ pub struct HashSettings {
 #[derive(Debug, Clone)]
 pub struct Configuration {
     role: Option<ProcessRole>,
-    source: Option<PathBuf>,
-    target: Option<PathBuf>,
+    source: Option<String>,
+    target: Option<String>,
     verbose: bool,
     hash: HashSettings,
     manifest_path: Option<PathBuf>,
@@ -76,17 +76,18 @@ impl Configuration {
     }
 
     #[inline]
-    pub fn target(&self) -> &Path {
-        &self.target.as_ref().unwrap()
-    }
-
-    #[inline]
     pub fn role(&self) -> Option<ProcessRole> {
         self.role
     }
 
+
     #[inline]
-    pub fn source(&self) -> &Path {
+    pub fn target(&self) -> &str {
+        &self.target.as_ref().unwrap()
+    }
+
+    #[inline]
+    pub fn source(&self) -> &str {
         &self.source.as_ref().unwrap()
     }
 
@@ -168,8 +169,8 @@ pub fn configure() -> Result<Configuration, Error> {
                 .takes_value(true)
         )
         .get_matches();
-    let source = args.value_of("source").map(PathBuf::from);
-    let target = args.value_of("target").map(PathBuf::from);
+    let source = args.value_of("source").map(String::from);
+    let target = args.value_of("target").map(String::from);
     let server_port = args.value_of("server-port").and_then(|v| {
         return match v.parse::<u16>() {
             Ok(v) => Some(v),
@@ -205,7 +206,7 @@ pub fn configure() -> Result<Configuration, Error> {
             },
             source,
             target,
-            verbose: role.is_none() && args.is_present("verbose"),
+            verbose: (role == Some(ProcessRole::Server) || role.is_none()) && args.is_present("verbose"),
             manifest_path: args.value_of("manifest file").map(PathBuf::from),
             role,
             server_port

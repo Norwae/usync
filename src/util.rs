@@ -12,7 +12,6 @@ impl ReadWrite<TcpStream, TcpStream> for TcpStream {
     fn as_reader(&mut self) -> &mut TcpStream {
         self
     }
-
     fn as_writer(&mut self) -> &mut TcpStream {
         self
     }
@@ -35,7 +34,6 @@ impl <R: Read, W: Write> ReadWrite<R, W> for CombineReadWrite<R, W> {
     fn as_reader(&mut self) -> &mut R {
         &mut self.read
     }
-
     fn as_writer(&mut self) -> &mut W {
         &mut self.write
     }

@@ -8,8 +8,8 @@ use crate::util::*;
 use crate::file_transfer::*;
 use std::thread;
 use filetime::FileTime;
-use std::net::TcpListener;
-use std::path::Path;
+use std::net::{TcpListener, TcpStream};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 mod config;
@@ -55,16 +55,20 @@ fn main_as_server(cfg: &Configuration) -> Result<(), Error> { // ! would be bett
     let server_port = TcpListener::bind(format!("0.0.0.0:{}", cfg.server_port()))?;
 
     loop {
+        let verbose = cfg.verbose();
         let (conn, sa) = server_port.accept()?;
         let manifest = manifest.clone();
-        let root = cfg.source().to_owned();
-        if cfg.verbose() {
+        let root = PathBuf::from(cfg.source());
+        if verbose {
             println!("Accepted connection {}", sa);
         }
         thread::spawn(move || {
-            command_handler_loop(&root, &manifest, conn).unwrap_or_else(|err| {
-                eprintln!("Command loop failed for {} with {}", sa, err)
-            });
+            match command_handler_loop(&root, &manifest, conn) {
+                Ok(_) => if verbose {
+                    println!("Finished sending to {}", sa)
+                },
+                Err(err) => eprintln!("Command loop failed for {} with {}", sa, err),
+            }
         });
     }
 }
@@ -72,30 +76,36 @@ fn main_as_server(cfg: &Configuration) -> Result<(), Error> { // ! would be bett
 
 
 fn main_as_sender<R: Read, W: Write, RW: ReadWrite<R, W>>(cfg: &Configuration, io: RW) -> Result<(), Error> {
-    let root = cfg.source();
+    let root = PathBuf::from(cfg.source());
     let manifest = Manifest::create_persistent(
-        root,
+        &root,
         false,
         cfg.hash_settings(),
         cfg.manifest_path())?;
 
-    command_handler_loop(root, &manifest, io)
+    command_handler_loop(&root, &manifest, io)
 }
 
 fn main_as_receiver<R: Read, W: Write, RW: ReadWrite<R, W>>(cfg: &Configuration, mut io: RW) -> Result<(), Error> {
-    let root = cfg.target();
+    let root = PathBuf::from(cfg.target());
 
-    let local_manifest = Manifest::create_ephemeral(root, false, cfg.hash_settings())?;
+    let local_manifest = Manifest::create_ephemeral(&root, false, cfg.hash_settings())?;
     write_bincoded(io.as_writer(), &Command::SendManifest)?;
     let remote_manifest = read_bincoded(io.as_reader())?;
 
-    let mut transmitter = CommandTransmitter::new(root, &mut io);
+    let mut transmitter = CommandTransmitter::new(&root, &mut io);
     local_manifest.copy_from(&remote_manifest, &mut transmitter, cfg.verbose())?;
 
     write_bincoded(io.as_writer(), &Command::End)
 }
 
 fn main_as_controller(cfg: &Configuration) -> Result<(), Error> {
+    if cfg.source().starts_with("server:") {
+        let remote = &cfg.source()[7..];
+        let remote = TcpStream::connect(remote)?;
+        return main_as_receiver(cfg, remote);
+    }
+
     let c1 = cfg.clone();
     let c2 = cfg.clone();
     let (send_to_receiver, receive_from_sender) = channel();
