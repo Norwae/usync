@@ -143,7 +143,7 @@ fn main_as_controller(cfg: &Configuration) -> Result<(), Error> {
     }
     if src.starts_with("remote://") {
         if trg.starts_with("remote://") {
-            return Err(Error::new(ErrorKind::Other, "Sides are remote"))
+            return Err(Error::new(ErrorKind::Other, "Both sides are remote"))
         }
 
         let (remote, remote_path) = parse_remote(&src);
