@@ -129,15 +129,12 @@ pub(crate) fn command_handler_loop<R: Read, W: Write, RW: ReadWrite<R, W>>(root:
         let next = read_bincoded(io.as_reader())?;
         match next {
             Command::End => {
-                eprintln!("Received End command, exiting");
                 return Ok(())
             },
             Command::SendManifest => {
-                eprintln!("Received SendManifest command");
                 write_bincoded(io.as_writer(), &manifest)?;
             }
             Command::SendFile(path) => {
-                eprintln!("Received SendFile command for {:?}", &path);
                 let mut file = root.to_owned();
                 for segment in path {
                     file.push(segment);
