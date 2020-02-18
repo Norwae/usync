@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::io::{Result, Write, Read};
 use std::fs::{create_dir_all, File};
 
@@ -10,12 +10,10 @@ use filetime::{set_file_mtime, FileTime};
 use std::cmp::min;
 use crate::util::{convert_error, ReadWrite};
 use serde::de::DeserializeOwned;
-use serde::export::{PhantomData, Formatter};
+
 use crate::tree::Manifest;
 use std::time::SystemTime;
-use std::fmt::Display;
-use serde::export::fmt::Error;
-use std::ffi::OsStr;
+use std::marker::PhantomData;
 
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
