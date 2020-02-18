@@ -42,7 +42,17 @@ impl LocalTransmitter<'_> {
 
 impl Transmitter for LocalTransmitter<'_> {
     fn transmit(&mut self, path: &Path) -> Result<()> {
-        std::fs::copy(&self.source.join(path), &self.target.join(path))?;
+        let source = self.source.join(path);
+        let target = self.target.join(path);
+        let parent = target.parent().unwrap();
+
+        if !parent.exists() {
+            create_dir_all(parent)?;
+        }
+
+        std::fs::copy(&source, &target)?;
+        let time = source.metadata()?.modified()?;
+        set_file_mtime(&target, FileTime::from(time))?;
         Ok(())
     }
 }
