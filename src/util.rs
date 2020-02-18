@@ -1,6 +1,45 @@
 use std::sync::mpsc::{Sender, Receiver};
 use std::io::{Read, Error, Write, ErrorKind};
 use std::cmp::min;
+use std::net::TcpStream;
+
+pub trait ReadWrite<R: Read, W: Write> {
+    fn as_reader(&mut self) -> &mut R;
+    fn as_writer(&mut self) -> &mut W;
+}
+
+impl ReadWrite<TcpStream, TcpStream> for TcpStream {
+    fn as_reader(&mut self) -> &mut TcpStream {
+        self
+    }
+
+    fn as_writer(&mut self) -> &mut TcpStream {
+        self
+    }
+}
+
+pub struct CombineReadWrite<R: Read, W: Write> {
+    read: R,
+    write: W
+}
+
+
+impl <R: Read, W: Write> CombineReadWrite<R, W> {
+    pub fn new(read: R, write: W) -> CombineReadWrite<R, W> {
+        CombineReadWrite{ read, write }
+    }
+}
+
+
+impl <R: Read, W: Write> ReadWrite<R, W> for CombineReadWrite<R, W> {
+    fn as_reader(&mut self) -> &mut R {
+        &mut self.read
+    }
+
+    fn as_writer(&mut self) -> &mut W {
+        &mut self.write
+    }
+}
 
 pub fn convert_error<E>(e: E) -> Error where E: Into<Box<dyn std::error::Error+Send+Sync>> {
     Error::new(ErrorKind::Other, e)

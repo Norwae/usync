@@ -1,7 +1,7 @@
 use std::io::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
 
-use clap::{App, Arg};
+use clap::{App, Arg, ArgGroup};
 use glob::Pattern;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -14,6 +14,7 @@ pub enum ManifestMode {
 pub enum ProcessRole {
     Sender,
     Receiver,
+    Server
 }
 
 #[derive(Debug, Clone)]
@@ -31,6 +32,7 @@ pub struct Configuration {
     verbose: bool,
     hash: HashSettings,
     manifest_path: Option<PathBuf>,
+    server_port: Option<u16>
 }
 
 impl HashSettings {
@@ -63,6 +65,11 @@ impl HashSettings {
 }
 
 impl Configuration {
+    #[inline]
+    pub fn server_port(&self) -> u16 {
+        self.server_port.unwrap()
+    }
+
     #[inline]
     pub fn manifest_path(&self) -> &Path {
         &self.manifest_path.as_ref().unwrap()
@@ -108,21 +115,19 @@ pub fn configure() -> Result<Configuration, Error> {
                 .help("Role of a remote-spawned instance.")
                 .long("role")
                 .takes_value(true)
-                .possible_values(&["sender", "receiver"])
+                .possible_values(&["sender", "receiver", "server"])
         )
         .arg(
             Arg::with_name("source")
                 .help("Sync source directory")
                 .long("source")
                 .takes_value(true)
-                .required(true)
         )
         .arg(
             Arg::with_name("target")
                 .help("Sync target directory")
                 .long("target")
                 .takes_value(true)
-                .required(true)
         )
         .arg(
             Arg::with_name("manifest file")
@@ -145,6 +150,15 @@ pub fn configure() -> Result<Configuration, Error> {
                 .short("v")
                 .takes_value(false)
         )
+        .group(ArgGroup::with_name("server")
+            .arg("server-port")
+        )
+        .arg(Arg::with_name("server-port")
+            .help("Port for the server to listen on")
+            .long("server-port")
+            .takes_value(true)
+            .default_value("9715")
+        )
         .arg(
             Arg::with_name("exclude")
                 .help("exclude glob (specify multiple times for several patterns")
@@ -156,6 +170,12 @@ pub fn configure() -> Result<Configuration, Error> {
         .get_matches();
     let source = args.value_of("source").map(PathBuf::from);
     let target = args.value_of("target").map(PathBuf::from);
+    let server_port = args.value_of("server-port").and_then(|v| {
+        return match v.parse::<u16>() {
+            Ok(v) => Some(v),
+            Err(_) => None
+        }
+    });
 
     let mut exclude_patterns = Vec::new();
 
@@ -168,6 +188,7 @@ pub fn configure() -> Result<Configuration, Error> {
     let role = match role {
         Some("sender") => Some(ProcessRole::Sender),
         Some("receiver") => Some(ProcessRole::Receiver),
+        Some("server") => Some(ProcessRole::Server),
         _ => None
     };
 
@@ -187,5 +208,6 @@ pub fn configure() -> Result<Configuration, Error> {
             verbose: role.is_none() && args.is_present("verbose"),
             manifest_path: args.value_of("manifest file").map(PathBuf::from),
             role,
+            server_port
         })
 }

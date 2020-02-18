@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::io::{Result, Write, Read};
+use std::io::{Result, Write, Read, Error, ErrorKind};
 use std::fs::create_dir_all;
 
 use crate::util;
@@ -8,8 +8,9 @@ use serde::{Serialize, Deserialize};
 use tempfile::NamedTempFile;
 use filetime::{set_file_mtime, FileTime};
 use std::cmp::min;
-use crate::util::convert_error;
+use crate::util::{convert_error, ReadWrite};
 use serde::de::DeserializeOwned;
+use serde::export::PhantomData;
 
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -52,7 +53,12 @@ pub fn read_size<R: Read>(input: &mut R) -> Result<u64> {
 }
 
 pub fn read_sized<R: Read>(input: &mut R) -> Result<Vec<u8>> {
+    const SANITY_LIMIT: u64 = 16 << 20;
     let length = read_size(input)?;
+
+    if length > SANITY_LIMIT {
+        return Err(Error::new(ErrorKind::Other, format!("Remote requested to process buffer of size {}, above sanity limit of {}", length, SANITY_LIMIT)))
+    }
     let mut v = vec![0u8; length as usize];
     input.read_exact(v.as_mut_slice())?;
 
@@ -78,28 +84,35 @@ impl<A: Read> Read for LimitRead<'_, A> {
     }
 }
 
-pub(crate) struct CommandTransmitter<'a, R: Read, W: Write> {
+pub(crate) struct CommandTransmitter<'a, R: Read, W: Write, RW: ReadWrite<R, W>> {
     root: &'a Path,
-    input: &'a mut R,
-    output: &'a mut W,
+    io: &'a mut RW,
+    p1: PhantomData<&'a R>,
+    p2: PhantomData<&'a W>
 }
 
-impl<R: Read, W: Write> CommandTransmitter<'_, R, W> {
-    pub fn new<'a>(root: &'a Path, input: &'a mut R, output: &'a mut W) -> Result<CommandTransmitter<'a, R, W>> {
-        Ok(CommandTransmitter { root, input, output })
+impl<R: Read, W: Write, RW: ReadWrite<R, W>> CommandTransmitter<'_, R, W, RW> {
+    pub fn new<'a>(root: &'a Path, io: &'a mut RW) -> CommandTransmitter<'a, R, W, RW> {
+        CommandTransmitter {
+            root,
+            io,
+            p1: PhantomData,
+            p2: PhantomData
+        }
     }
+
 }
 
-impl<'a, R2: Read, W2: Write> Transmitter for CommandTransmitter<'a, R2, W2> {
+impl<'a, R: Read, W: Write, RW: ReadWrite<R, W>> Transmitter for CommandTransmitter<'a, R, W, RW> {
     fn transmit(&mut self, path: &Path) -> Result<()> {
-        write_bincoded(self.output, &Command::SendFile(path.to_string_lossy().into()))?;
-        let sec = read_size(self.input)?;
-        let nano = read_size(self.input)?;
-        let size = read_size(self.input)?;
+        write_bincoded(self.io.as_writer(), &Command::SendFile(path.to_string_lossy().into()))?;
+        let sec = read_size(self.io.as_reader())?;
+        let nano = read_size(self.io.as_reader())?;
+        let size = read_size(self.io.as_reader())?;
         let time = FileTime::from_unix_time(sec as i64, nano as u32);
 
         let path = self.root.join(path);
-        save_copy(&path, &mut self.input, size)?;
+        save_copy(&path, &mut self.io.as_reader(), size)?;
         set_file_mtime(path, time)?;
 
         Ok(())
