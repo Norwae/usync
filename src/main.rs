@@ -5,10 +5,12 @@ use crate::config::{Configuration, ProcessRole};
 use crate::tree::Manifest;
 use crate::util::*;
 use crate::file_transfer::*;
+use std::process;
 use std::thread;
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::process::Stdio;
 
 mod config;
 mod tree;
@@ -103,10 +105,42 @@ fn main_as_local_pipe(cfg: &Configuration) -> Result<(), Error> {
 
 
 fn main_as_controller(cfg: &Configuration) -> Result<(), Error> {
-    if cfg.source().starts_with("server:") {
-        let remote = &cfg.source()[7..];
+    let src = cfg.source();
+    if src.starts_with("server://") {
+        let remote = &src[9..];
         let remote = TcpStream::connect(remote)?;
         return main_as_receiver(cfg, remote);
+    }
+    if src.starts_with("remote://") {
+        let (remote, remote_path) = parse_remote(&src);
+        let mode = cfg.hash_settings().manifest_mode().to_string();
+
+        let mut ssh_invoke = vec![remote, "usync",
+                                  "--role", "sender",
+                                  "--source", remote_path,
+                                  "--manifest-file", cfg.manifest_path().to_str().unwrap(),
+                                  "--hash-mode", &mode
+        ];
+
+        if cfg.hash_settings().force_rebuild() {
+            ssh_invoke.push("--force-rebuild-manifest")
+        }
+        for p in cfg.hash_settings().exclude_patterns() {
+            ssh_invoke.push("--exclude");
+            ssh_invoke.push(p.as_str());
+        }
+
+        if cfg.verbose() {
+            println!("Spawning process: {:?}", &ssh_invoke);
+        }
+
+        let proc = process::Command::new("ssh")
+            .args(ssh_invoke)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()?;
+        let io = CombineReadWrite::new(proc.stdout.unwrap(), proc.stdin.unwrap());
+        return main_as_receiver(cfg, io);
     }
 
     if !cfg.force_pipeline() {
@@ -114,6 +148,14 @@ fn main_as_controller(cfg: &Configuration) -> Result<(), Error> {
     }
 
     main_as_local_pipe(cfg)
+}
+
+fn parse_remote<'a>(src: &'a str) -> (&'a str, &'a str) {
+    let src = &src[9..];
+    let next_slash = src.find("/").unwrap();
+    let remote = &src[.. next_slash];
+    let remote_path = &src[next_slash+1 ..];
+    (remote, remote_path)
 }
 
 

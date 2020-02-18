@@ -3,11 +3,25 @@ use std::path::{Path, PathBuf};
 
 use clap::{App, Arg, ArgGroup};
 use glob::Pattern;
+use crate::config::ManifestMode::TimestampTest;
+use std::fmt::Display;
+use serde::export::Formatter;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ManifestMode {
     TimestampTest,
     Hash,
+}
+
+impl Display for ManifestMode {
+
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
+        let str = match self {
+                TimestampTest => "timestamp",
+                ManifestMode::Hash => "hash",
+            };
+        f.write_str(str)
+    }
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -37,6 +51,12 @@ pub struct Configuration {
 }
 
 impl HashSettings {
+
+    #[inline]
+    pub fn exclude_patterns(&self) -> &Vec<Pattern> {
+        &self.exclude_patterns
+    }
+
     #[inline]
     pub fn force_rebuild(&self) -> bool {
         self.force_rebuild

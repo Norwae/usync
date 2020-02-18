@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::io::{Result, Write, Read};
 use std::fs::{create_dir_all, File};
 
@@ -10,16 +10,19 @@ use filetime::{set_file_mtime, FileTime};
 use std::cmp::min;
 use crate::util::{convert_error, ReadWrite};
 use serde::de::DeserializeOwned;
-use serde::export::PhantomData;
+use serde::export::{PhantomData, Formatter};
 use crate::tree::Manifest;
 use std::time::SystemTime;
+use std::fmt::Display;
+use serde::export::fmt::Error;
+use std::ffi::OsStr;
 
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Command {
     End,
     SendManifest,
-    SendFile(String),
+    SendFile(Vec<String>),
 }
 
 pub trait Transmitter {
@@ -128,13 +131,19 @@ pub(crate) fn command_handler_loop<R: Read, W: Write, RW: ReadWrite<R, W>>(root:
         let next = read_bincoded(io.as_reader())?;
         match next {
             Command::End => {
+                eprintln!("Received End command, exiting");
                 return Ok(())
             },
             Command::SendManifest => {
+                eprintln!("Received SendManifest command");
                 write_bincoded(io.as_writer(), &manifest)?;
             }
             Command::SendFile(path) => {
-                let file = root.join(path);
+                eprintln!("Received SendFile command for {:?}", &path);
+                let mut file = root.to_owned();
+                for segment in path {
+                    file.push(segment);
+                }
                 let meta = file.metadata()?;
                 let size = meta.len();
                 let mtime = PortableTime::new(meta.modified()?);
@@ -152,7 +161,12 @@ pub(crate) fn command_handler_loop<R: Read, W: Write, RW: ReadWrite<R, W>>(root:
 
 impl<'a, R: Read, W: Write, RW: ReadWrite<R, W>> Transmitter for CommandTransmitter<'a, R, W, RW> {
     fn transmit(&mut self, path: &Path) -> Result<()> {
-        write_bincoded(self.io.as_writer(), &Command::SendFile(path.to_string_lossy().into()))?;
+        let mut args = Vec::new();
+        for comp in path.iter() {
+            args.push(String::from(comp.to_string_lossy()));
+        }
+
+        write_bincoded(self.io.as_writer(), &Command::SendFile(args))?;
 
         let time = read_bincoded::<R, PortableTime>(self.io.as_reader())?.to_file_time();
         let size = read_bincoded(self.io.as_reader())?;
