@@ -12,6 +12,7 @@ use crate::util::{convert_error, ReadWrite};
 use serde::de::DeserializeOwned;
 use serde::export::PhantomData;
 use crate::tree::Manifest;
+use std::time::SystemTime;
 
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,45 +47,32 @@ impl Transmitter for LocalTransmitter<'_> {
     }
 }
 
-
 pub fn read_bincoded<R: Read, C: DeserializeOwned>(input: &mut R) -> Result<C> {
-    let command_buffer = read_sized(input)?;
-    bincode::deserialize(command_buffer.as_slice()).map_err(util::convert_error)
+    bincode::deserialize_from(input).map_err(util::convert_error)
 }
-
 
 pub fn write_bincoded<W: Write, S: Serialize>(output: &mut W, data: &S) -> Result<()> {
-    let vector = bincode::serialize(data).map_err(util::convert_error)?;
-    write_sized(output, vector)
+    bincode::serialize_into(output, data).map_err(util::convert_error)
 }
 
-pub fn write_sized<W: Write, O: AsRef<[u8]>>(output: &mut W, data: O) -> Result<()> {
-    let r = data.as_ref();
-    write_size(output, r.len() as u64)?;
-    output.write_all(r)
+#[derive(Deserialize, Serialize)]
+struct PortableTime {
+    secs: i64,
+    nanos: u32
 }
 
-pub fn write_size<W: Write>(output: &mut W, size: u64) -> Result<()> {
-    output.write_all(&size.to_le_bytes())
-}
-
-pub fn read_size<R: Read>(input: &mut R) -> Result<u64> {
-    let mut length_buffer = [0u8; 8];
-    input.read_exact(&mut length_buffer)?;
-    Ok(u64::from_le_bytes(length_buffer))
-}
-
-pub fn read_sized<R: Read>(input: &mut R) -> Result<Vec<u8>> {
-    const SANITY_LIMIT: u64 = 16 << 20;
-    let length = read_size(input)?;
-
-    if length > SANITY_LIMIT {
-        return Err(Error::new(ErrorKind::Other, format!("Remote requested to process buffer of size {}, above sanity limit of {}", length, SANITY_LIMIT)))
+impl PortableTime {
+    fn new(time: SystemTime) -> PortableTime {
+        let time = FileTime::from(time);
+        PortableTime {
+            secs: time.unix_seconds(),
+            nanos: time.nanoseconds()
+        }
     }
-    let mut v = vec![0u8; length as usize];
-    input.read_exact(v.as_mut_slice())?;
 
-    Ok(v)
+    fn to_file_time(&self) -> FileTime {
+        FileTime::from_unix_time(self.secs, self.nanos)
+    }
 }
 
 struct LimitRead<'a, A: Read> {
@@ -139,13 +127,11 @@ pub(crate) fn command_handler_loop<R: Read, W: Write, RW: ReadWrite<R, W>>(root:
                 let file = root.join(path);
                 let meta = file.metadata()?;
                 let size = meta.len();
-                let mtime = meta.modified()?;
+                let mtime = PortableTime::new(meta.modified()?);
                 let mut file = File::open(file)?;
                 let output = io.as_writer();
-                let mtime = FileTime::from(mtime);
-                write_size(output, mtime.unix_seconds() as u64)?;
-                write_size(output, mtime.nanoseconds() as u64)?;
-                write_size(output, size)?;
+                write_bincoded(output, &mtime);
+                write_bincoded(output, &size);
                 std::io::copy(&mut file, output)?;
             }
         }
@@ -157,10 +143,9 @@ pub(crate) fn command_handler_loop<R: Read, W: Write, RW: ReadWrite<R, W>>(root:
 impl<'a, R: Read, W: Write, RW: ReadWrite<R, W>> Transmitter for CommandTransmitter<'a, R, W, RW> {
     fn transmit(&mut self, path: &Path) -> Result<()> {
         write_bincoded(self.io.as_writer(), &Command::SendFile(path.to_string_lossy().into()))?;
-        let sec = read_size(self.io.as_reader())?;
-        let nano = read_size(self.io.as_reader())?;
-        let size = read_size(self.io.as_reader())?;
-        let time = FileTime::from_unix_time(sec as i64, nano as u32);
+
+        let time = read_bincoded::<R, PortableTime>(self.io.as_reader())?.to_file_time();
+        let size = read_bincoded(self.io.as_reader())?;
 
         let path = self.root.join(path);
         save_copy(&path, &mut self.io.as_reader(), size)?;

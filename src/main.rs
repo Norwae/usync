@@ -69,6 +69,41 @@ fn main_as_receiver<R: Read, W: Write, RW: ReadWrite<R, W>>(cfg: &Configuration,
     write_bincoded(io.as_writer(), &Command::End)
 }
 
+fn main_as_local(cfg: &Configuration) -> Result<(), Error> {
+    let to = PathBuf::from(cfg.target());
+    let from = PathBuf::from(cfg.source());
+    let target = Manifest::create_ephemeral(&to, cfg.verbose(), cfg.hash_settings())?;
+    let src = Manifest::create_persistent(&from, cfg.verbose(), cfg.hash_settings(), cfg.manifest_path())?;
+    target.copy_from(&src, &mut LocalTransmitter::new(&from, &to), cfg.verbose())
+}
+
+fn main_as_local_pipe(cfg: &Configuration) -> Result<(), Error> {
+    let c1 = cfg.clone();
+    let c2 = cfg.clone();
+    let (send_to_receiver, receive_from_sender) = channel();
+    let (send_to_sender, receive_from_receiver) = channel();
+    let sender = thread::spawn(move || {
+        let output = SendAdapter::new(send_to_receiver);
+        let input = ReceiveAdapter::new(receive_from_receiver);
+
+        main_as_sender(&c1, CombineReadWrite::new(input, output)).unwrap_or_else(|e| {
+            println!("Sender failed with: {}", e);
+        });
+    });
+    let receiver = thread::spawn(move || {
+        let output = SendAdapter::new(send_to_sender);
+        let input = ReceiveAdapter::new(receive_from_sender);
+
+        main_as_receiver(&c2, CombineReadWrite::new(input, output)).unwrap_or_else(|e| {
+            println!("Receive failed: {}", e)
+        });
+    });
+    sender.join().unwrap();
+    receiver.join().unwrap();
+    Ok(())
+}
+
+
 fn main_as_controller(cfg: &Configuration) -> Result<(), Error> {
     if cfg.source().starts_with("server:") {
         let remote = &cfg.source()[7..];
@@ -80,41 +115,9 @@ fn main_as_controller(cfg: &Configuration) -> Result<(), Error> {
         return main_as_local(cfg);
     }
 
-    let c1 = cfg.clone();
-    let c2 = cfg.clone();
-    let (send_to_receiver, receive_from_sender) = channel();
-    let (send_to_sender, receive_from_receiver) = channel();
-
-    let sender = thread::spawn(move || {
-        let output = SendAdapter::new(send_to_receiver);
-        let input = ReceiveAdapter::new(receive_from_receiver);
-
-        main_as_sender(&c1, CombineReadWrite::new(input, output)).unwrap_or_else(|e|{
-            println!("Sender failed with: {}", e);
-        });
-    });
-
-    let receiver = thread::spawn(move || {
-        let output = SendAdapter::new(send_to_sender);
-        let input = ReceiveAdapter::new(receive_from_sender);
-
-        main_as_receiver(&c2, CombineReadWrite::new(input, output)).unwrap_or_else(|e| {
-            println!("Receive failed: {}", e)
-        });
-    });
-
-    sender.join().unwrap();
-    receiver.join().unwrap();
-    Ok(())
+    main_as_local_pipe(cfg)
 }
 
-fn main_as_local(cfg: &Configuration) -> Result<(), Error> {
-    let to = PathBuf::from(cfg.target());
-    let from = PathBuf::from(cfg.source());
-    let target = Manifest::create_ephemeral(&to, cfg.verbose(), cfg.hash_settings())?;
-    let src = Manifest::create_persistent(&from, cfg.verbose(), cfg.hash_settings(), cfg.manifest_path())?;
-    target.copy_from(&src, &mut LocalTransmitter::new(&from, &to), cfg.verbose())
-}
 
 fn main() -> Result<(), Error> {
     let cfg = config::configure()?;
