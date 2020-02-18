@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::io::{Result, Write, Read, Error, ErrorKind};
+use std::io::{Result, Write, Read};
 use std::fs::{create_dir_all, File};
 
 use crate::util;
@@ -130,8 +130,8 @@ pub(crate) fn command_handler_loop<R: Read, W: Write, RW: ReadWrite<R, W>>(root:
                 let mtime = PortableTime::new(meta.modified()?);
                 let mut file = File::open(file)?;
                 let output = io.as_writer();
-                write_bincoded(output, &mtime);
-                write_bincoded(output, &size);
+                write_bincoded(output, &mtime)?;
+                write_bincoded(output, &size)?;
                 std::io::copy(&mut file, output)?;
             }
         }
@@ -148,8 +148,8 @@ impl<'a, R: Read, W: Write, RW: ReadWrite<R, W>> Transmitter for CommandTransmit
         let size = read_bincoded(self.io.as_reader())?;
 
         let path = self.root.join(path);
-        save_copy(&path, &mut self.io.as_reader(), size)?;
-        set_file_mtime(path, time)?;
+        save_copy(&path, self.io.as_reader(), size)?;
+        set_file_mtime(&path, time)?;
 
         Ok(())
     }

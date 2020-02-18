@@ -1,4 +1,3 @@
-use std::fs::File;
 use std::io::{Error, Read, Write, stdin, stdout};
 use std::sync::mpsc::channel;
 
@@ -7,9 +6,8 @@ use crate::tree::Manifest;
 use crate::util::*;
 use crate::file_transfer::*;
 use std::thread;
-use filetime::FileTime;
 use std::net::{TcpListener, TcpStream};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 mod config;
