@@ -55,7 +55,7 @@ mod test_rw {
 
     #[test]
     fn test_rw_flush() -> Result<(), Error>{
-        let mut target = Vec::new();
+        let target = Vec::new();
         let buf = BufWriter::new(target);
         let mut rw = CombineReadWrite::new(empty(), buf);
         rw.write(b"Hell")?;
@@ -170,7 +170,7 @@ mod test_adapt {
     #[test]
     fn transfer_nothing() -> Result<(), Error> {
         let receive = {
-            let (mut send, receive) = spawn_sut();
+            let (_, receive) = spawn_sut();
             receive
         };
 
@@ -183,7 +183,7 @@ mod test_adapt {
     fn transfer_some_bytes() -> Result<(), Error> {
         let receive = {
             let (mut send, receive) = spawn_sut();
-            send.write(b"Hello World");
+            send.write(b"Hello World")?;
             receive
         };
 
@@ -199,7 +199,7 @@ mod test_adapt {
             let (mut send, receive) = spawn_sut();
             let mut v = Vec::with_capacity(N);
             for i in 0 ..= N {
-                send.write(&v);
+                send.write(&v)?;
                 v.push(i as u8)
             }
             receive
