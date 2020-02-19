@@ -53,7 +53,7 @@ fn main_as_server(cfg: &Configuration) -> Result<(), Error> { // ! would be bett
 
 
 
-fn main_as_sender<R: Read, W: Write, RW: ReadWrite<R, W>>(cfg: &Configuration, io: RW) -> Result<(), Error> {
+fn main_as_sender<RW: Read + Write>(cfg: &Configuration, io: RW) -> Result<(), Error> {
     if let PathDefinition::Local(root) = cfg.source() {
         let manifest = Manifest::create_persistent(
             &root,
@@ -67,16 +67,17 @@ fn main_as_sender<R: Read, W: Write, RW: ReadWrite<R, W>>(cfg: &Configuration, i
     }
 }
 
-fn main_as_receiver<R: Read, W: Write, RW: ReadWrite<R, W>>(cfg: &Configuration, mut io: RW) -> Result<(), Error> {
+fn main_as_receiver<RW: Read + Write>(cfg: &Configuration, mut io: RW) -> Result<(), Error> {
+    let io = &mut io;
     if let PathDefinition::Local(root) = cfg.target() {
         let local_manifest = Manifest::create_ephemeral(&root, false, cfg.hash_settings())?;
-        write_bincoded(io.as_writer(), &Command::SendManifest)?;
-        let remote_manifest = read_bincoded(io.as_reader())?;
+        write_bincoded(io, &Command::SendManifest)?;
+        let remote_manifest = read_bincoded(io)?;
 
-        let mut transmitter = CommandTransmitter::new(&root, &mut io);
+        let mut transmitter = CommandTransmitter::new(&root, io);
         local_manifest.copy_from(&remote_manifest, &mut transmitter, cfg.verbose())?;
 
-        write_bincoded(io.as_writer(), &Command::End)
+        write_bincoded(io, &Command::End)
     } else {
         non_local_path(cfg.target())
     }

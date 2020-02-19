@@ -8,13 +8,11 @@ use serde::{Serialize, Deserialize};
 use tempfile::NamedTempFile;
 use filetime::{set_file_mtime, FileTime};
 use std::cmp::min;
-use crate::util::{convert_error, ReadWrite};
+use crate::util::convert_error;
 use serde::de::DeserializeOwned;
 
 use crate::tree::Manifest;
 use std::time::SystemTime;
-use std::marker::PhantomData;
-
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Command {
@@ -105,34 +103,31 @@ impl<A: Read> Read for LimitRead<'_, A> {
     }
 }
 
-pub(crate) struct CommandTransmitter<'a, R: Read, W: Write, RW: ReadWrite<R, W>> {
+pub(crate) struct CommandTransmitter<'a,  RW: Read + Write> {
     root: &'a Path,
-    io: &'a mut RW,
-    p1: PhantomData<&'a R>,
-    p2: PhantomData<&'a W>
+    io: &'a mut RW
 }
 
-impl<R: Read, W: Write, RW: ReadWrite<R, W>> CommandTransmitter<'_, R, W, RW> {
-    pub fn new<'a>(root: &'a Path, io: &'a mut RW) -> CommandTransmitter<'a, R, W, RW> {
+impl<RW: Read + Write> CommandTransmitter<'_, RW> {
+    pub fn new<'a>(root: &'a Path, io: &'a mut RW) -> CommandTransmitter<'a, RW> {
         CommandTransmitter {
             root,
-            io,
-            p1: PhantomData,
-            p2: PhantomData
+            io
         }
     }
 }
 
 
-pub(crate) fn command_handler_loop<R: Read, W: Write, RW: ReadWrite<R, W>>(root: &Path, manifest: &Manifest, mut io: RW) -> Result<()> {
+pub(crate) fn command_handler_loop<RW: Read + Write>(root: &Path, manifest: &Manifest, mut io: RW) -> Result<()> {
+    let io = &mut io;
     loop {
-        let next = read_bincoded(io.as_reader())?;
+        let next = read_bincoded(io)?;
         match next {
             Command::End => {
                 return Ok(())
             },
             Command::SendManifest => {
-                write_bincoded(io.as_writer(), &manifest)?;
+                write_bincoded(io, &manifest)?;
             }
             Command::SendFile(path) => {
                 let mut file = root.to_owned();
@@ -143,31 +138,30 @@ pub(crate) fn command_handler_loop<R: Read, W: Write, RW: ReadWrite<R, W>>(root:
                 let size = meta.len();
                 let mtime = PortableTime::new(meta.modified()?);
                 let mut file = File::open(file)?;
-                let output = io.as_writer();
-                write_bincoded(output, &mtime)?;
-                write_bincoded(output, &size)?;
-                std::io::copy(&mut file, output)?;
+                write_bincoded( io, &mtime)?;
+                write_bincoded( io, &size)?;
+                std::io::copy(&mut file, io)?;
             }
         }
 
-        io.as_writer().flush()?;
+        io.flush()?;
     }
 }
 
-impl<'a, R: Read, W: Write, RW: ReadWrite<R, W>> Transmitter for CommandTransmitter<'a, R, W, RW> {
+impl<'a, RW: Read + Write> Transmitter for CommandTransmitter<'a, RW> {
     fn transmit(&mut self, path: &Path) -> Result<()> {
         let mut args = Vec::new();
         for comp in path.iter() {
             args.push(String::from(comp.to_string_lossy()));
         }
 
-        write_bincoded(self.io.as_writer(), &Command::SendFile(args))?;
+        write_bincoded(self.io, &Command::SendFile(args))?;
 
-        let time = read_bincoded::<R, PortableTime>(self.io.as_reader())?.to_file_time();
-        let size = read_bincoded(self.io.as_reader())?;
+        let time = read_bincoded::<RW, PortableTime>(self.io)?.to_file_time();
+        let size = read_bincoded(self.io)?;
 
         let path = self.root.join(path);
-        save_copy(&path, self.io.as_reader(), size)?;
+        save_copy(&path, self.io, size)?;
         set_file_mtime(&path, time)?;
 
         Ok(())

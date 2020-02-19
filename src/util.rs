@@ -1,22 +1,6 @@
 use std::sync::mpsc::{Sender, Receiver};
 use std::io::{Read, Error, Write, ErrorKind};
 use std::cmp::min;
-use std::net::TcpStream;
-
-pub trait ReadWrite<R: Read, W: Write> {
-    fn as_reader(&mut self) -> &mut R;
-    fn as_writer(&mut self) -> &mut W;
-}
-
-impl ReadWrite<TcpStream, TcpStream> for TcpStream {
-    fn as_reader(&mut self) -> &mut TcpStream {
-        self
-    }
-    fn as_writer(&mut self) -> &mut TcpStream {
-        self
-    }
-}
-
 pub struct CombineReadWrite<R: Read, W: Write> {
     read: R,
     write: W
@@ -29,13 +13,19 @@ impl <R: Read, W: Write> CombineReadWrite<R, W> {
     }
 }
 
-
-impl <R: Read, W: Write> ReadWrite<R, W> for CombineReadWrite<R, W> {
-    fn as_reader(&mut self) -> &mut R {
-        &mut self.read
+impl <R: Read, W: Write> Read for CombineReadWrite<R, W> {
+    fn read(&mut self, buf: &mut [u8]) -> Result<usize, Error> {
+        self.read.read(buf)
     }
-    fn as_writer(&mut self) -> &mut W {
-        &mut self.write
+}
+
+impl <R: Read, W: Write>  Write for CombineReadWrite<R, W> {
+    fn write(&mut self, buf: &[u8]) -> Result<usize, Error> {
+        self.write.write(buf)
+    }
+
+    fn flush(&mut self) -> Result<(), Error> {
+        self.write.flush()
     }
 }
 
