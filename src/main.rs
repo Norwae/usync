@@ -1,30 +1,30 @@
-use std::io::{Error, Read, Write, stdin, stdout, ErrorKind};
-use std::sync::mpsc::channel;
-
-use crate::config::{Configuration, ProcessRole, PathDefinition};
-use crate::tree::Manifest;
-use crate::util::*;
-use crate::file_transfer::*;
-use std::process;
-use std::thread;
+use std::io::{Error, ErrorKind, Read, stdin, stdout, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::process;
 use std::process::Stdio;
+use std::sync::Arc;
+use std::sync::mpsc::channel;
+use std::thread;
+
+use crate::config::{Configuration, PathDefinition, ProcessRole};
+use crate::file_transfer::*;
+use crate::tree::Manifest;
+use crate::util::*;
 
 mod config;
 mod tree;
 mod util;
 mod file_transfer;
 
+#[inline]
 fn non_local_path<A>(path: &PathDefinition) -> Result<A, Error> {
     Err(Error::new(ErrorKind::Other, format!("Non-local path where local context is required: {}", path)))
 }
 
 fn main_as_server(cfg: &Configuration) -> Result<(), Error> { // ! would be better, but hey...
     if let PathDefinition::Local(root) = cfg.source() {
-        let manifest =
-            Manifest::create_persistent(root, cfg.verbose(), cfg.hash_settings(), cfg.manifest_path())?;
+        let manifest = Manifest::create_persistent(root, cfg.verbose(), cfg.hash_settings(), cfg.manifest_path())?;
         let manifest = Arc::new(manifest);
         let server_port = TcpListener::bind(format!("0.0.0.0:{}", cfg.server_port()))?;
 
@@ -50,8 +50,6 @@ fn main_as_server(cfg: &Configuration) -> Result<(), Error> { // ! would be bett
     }
 
 }
-
-
 
 fn main_as_sender<RW: Read + Write>(cfg: &Configuration, io: RW) -> Result<(), Error> {
     if let PathDefinition::Local(root) = cfg.source() {
@@ -102,12 +100,13 @@ fn main_as_local_pipe(cfg: &Configuration) -> Result<(), Error> {
     let c2 = cfg.clone();
     let (send_to_receiver, receive_from_sender) = channel();
     let (send_to_sender, receive_from_receiver) = channel();
+
     let sender = thread::spawn(move || {
         let output = SendAdapter::new(send_to_receiver);
         let input = ReceiveAdapter::new(receive_from_receiver);
 
         main_as_sender(&c1, CombineReadWrite::new(input, output)).unwrap_or_else(|e| {
-            println!("Sender failed with: {}", e);
+            eprintln!("Sender failed with: {}", e);
         });
     });
     let receiver = thread::spawn(move || {
@@ -115,7 +114,7 @@ fn main_as_local_pipe(cfg: &Configuration) -> Result<(), Error> {
         let input = ReceiveAdapter::new(receive_from_sender);
 
         main_as_receiver(&c2, CombineReadWrite::new(input, output)).unwrap_or_else(|e| {
-            println!("Receive failed: {}", e)
+            eprintln!("Receive failed: {}", e)
         });
     });
     sender.join().unwrap();
@@ -123,7 +122,7 @@ fn main_as_local_pipe(cfg: &Configuration) -> Result<(), Error> {
     Ok(())
 }
 
-fn build_command(cfg: &Configuration, role: &str, remote: &str, target_param: &str, target_path: &str) -> std::process::Command {
+fn spawn_remote_usync(cfg: &Configuration, role: &str, remote: &str, target_param: &str, target_path: &str) -> Result<std::process::Child, Error> {
     let mode = cfg.hash_settings().manifest_mode().to_string();
 
     let mut ssh_invoke = vec![remote, "usync",
@@ -142,15 +141,15 @@ fn build_command(cfg: &Configuration, role: &str, remote: &str, target_param: &s
     }
 
     if cfg.verbose() {
-        println!("Spawning process: {:?}", &ssh_invoke);
+        let stringify = ssh_invoke.join(" ");
+        println!("Spawning process: ssh {}", stringify);
     }
 
-    let mut proc = process::Command::new("ssh");
-    proc
+    process::Command::new("ssh")
         .args(ssh_invoke)
         .stdin(Stdio::piped())
-        .stdout(Stdio::piped());
-    proc
+        .stdout(Stdio::piped())
+        .spawn()
 }
 
 fn main_as_controller(cfg: &Configuration) -> Result<(), Error> {
@@ -170,22 +169,18 @@ fn main_as_controller(cfg: &Configuration) -> Result<(), Error> {
             main_as_receiver(cfg, stream)
         }
         (PathDefinition::Remote(remote, remote_path), PathDefinition::Local(_)) => {
-            let mut cmd = build_command(cfg, "sender", remote, "--source", remote_path);
-            let proc = cmd.spawn()?;
+            let proc = spawn_remote_usync(cfg, "sender", remote, "--source", remote_path)?;
             let io = CombineReadWrite::new(proc.stdout.unwrap(), proc.stdin.unwrap());
             main_as_receiver(cfg, io)
         }
         (PathDefinition::Local(_), PathDefinition::Remote(remote, remote_path)) => {
-            let mut cmd = build_command(cfg, "receiver", remote, "--target", remote_path);
-            let proc = cmd.spawn()?;
+            let proc = spawn_remote_usync(cfg, "receiver", remote, "--target", remote_path)?;
             let io = CombineReadWrite::new(proc.stdout.unwrap(), proc.stdin.unwrap());
             main_as_sender(cfg, io)
         }
         _ => Err(Error::new(ErrorKind::Other, format!("Unsupported combination of paths: {} vs {}", src, trg)))
     }
 }
-
-
 
 fn main() -> Result<(), Error> {
     let cfg = config::configure()?;
