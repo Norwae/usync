@@ -31,13 +31,36 @@ impl Display for PathDefinition {
     }
 }
 
+#[cfg(test)]
+mod test_paths {
+    use super::*;
+
+    #[test]
+    fn parse_local() {
+        let path = PathDefinition::parse("/a/local/path");
+        assert_eq!(Local(PathBuf::from("/a/local/path")), path)
+    }
+
+    #[test]
+    fn parse_remote() {
+        let path = PathDefinition::parse("remote://user@a.host.name:remote/path");
+        assert_eq!(Remote("user@a.host.name".to_owned(), "remote/path".to_owned()), path);
+    }
+
+    #[test]
+    fn parse_server() {
+        let path = PathDefinition::parse("server://server.name:1991");
+        assert_eq!(Server("server.name:1991".to_owned()), path);
+    }
+}
+
 impl PathDefinition {
     fn parse(string: &str) -> PathDefinition {
         if string.starts_with("remote://") {
             let src = &string[9..];
-            let next_slash = src.find("/").unwrap();
-            let remote = &src[.. next_slash];
-            let remote_path = &src[next_slash+1 ..];
+            let path_sep = src.find(":").unwrap();
+            let remote = &src[..path_sep];
+            let remote_path = &src[path_sep +1 ..];
             Remote(String::from(remote), String::from(remote_path))
         } else if string.starts_with("server://") {
             Server(String::from(&string[9..]))
@@ -122,6 +145,40 @@ impl HashSettings {
         copy.exclude_patterns.push(pattern);
 
         copy
+    }
+}
+
+#[cfg(test)]
+mod test_excludes {
+    use super::*;
+    use glob::PatternError;
+
+    #[test]
+    fn apply_excludes() -> Result<(), PatternError>{
+        let settings = HashSettings{
+            force_rebuild: false,
+            mode: ManifestMode::TimestampTest,
+            exclude_patterns: vec![Pattern::new("ab*ca")?]
+        };
+
+        assert_eq!(settings.is_excluded(&PathBuf::from("abnahfpaclca")), true);
+        assert_eq!(settings.is_excluded(&PathBuf::from("anotherfile.txt")), false);
+
+        Ok(())
+    }
+
+    #[test]
+    fn apply_excludes_with_additional() -> Result<(), PatternError>{
+        let settings = HashSettings{
+            force_rebuild: false,
+            mode: ManifestMode::TimestampTest,
+            exclude_patterns: vec![Pattern::new("ab*ca")?]
+        }.with_additional_exclusion(&PathBuf::from("anotherfile.txt"));
+
+        assert_eq!(settings.is_excluded(&PathBuf::from("abnahfpaclca")), true);
+        assert_eq!(settings.is_excluded(&PathBuf::from("anotherfile.txt")), true);
+
+        Ok(())
     }
 }
 

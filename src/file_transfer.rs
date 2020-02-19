@@ -103,7 +103,7 @@ impl<A: Read> Read for LimitRead<'_, A> {
     }
 }
 
-pub(crate) struct CommandTransmitter<'a,  RW: Read + Write> {
+pub struct CommandTransmitter<'a,  RW: Read + Write> {
     root: &'a Path,
     io: &'a mut RW
 }
