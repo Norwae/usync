@@ -396,7 +396,7 @@ mod test_tree_hashing {
 
         let dir = DirectoryEntry::new(root.path(), false, &test_support::default_settings())?;
 
-        assert_eq!("b178872f99aa86b175afb23e34943eb04a40f3ae6940e14b89f2608813135abb", hex::encode(dir.hash_value));
+        assert_eq!(dir.hash_value, unhex("b178872f99aa86b175afb23e34943eb04a40f3ae6940e14b89f2608813135abb"));
 
 
         Ok(())
