@@ -1,5 +1,5 @@
 use std::ffi::OsStr;
-use std::fs::{File, read_dir};
+use std::fs::{File, read_dir, symlink_metadata, Metadata};
 use std::io::{Error, ErrorKind, Read, Result, BufReader, BufWriter, empty};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -36,7 +36,7 @@ impl Named for FileEntry {
 }
 
 impl FileEntry {
-    fn new(path: &Path, verbose: bool, settings: &HashSettings) -> Result<FileEntry> {
+    fn new(path: &Path, meta: &Metadata, verbose: bool, settings: &HashSettings) -> Result<FileEntry> {
 
         let hash_value = if settings.manifest_mode() == ManifestMode::Hash {
             hash(File::open(path)?)?
@@ -44,7 +44,6 @@ impl FileEntry {
             [0u8; 32]
         };
 
-        let metadata = path.metadata()?;
         let name = filename_to_string(path.file_name());
 
         if verbose {
@@ -53,8 +52,8 @@ impl FileEntry {
 
         Ok(FileEntry {
             name,
-            modification_time: metadata.modified()?,
-            file_size: metadata.len(),
+            modification_time: meta.modified()?,
+            file_size: meta.len(),
             hash_value,
         })
     }
@@ -209,34 +208,39 @@ impl DirectoryEntry {
 
         for entry in dir {
             let entry = entry?;
+
             pb.push(entry.file_name());
 
             if settings.is_excluded(pb.as_ref()) {
                 if verbose {
                     println!("Excluding file {}", pb.to_string_lossy())
                 }
-                pb.pop();
-                continue;
-            }
-
-            if entry.metadata()?.is_dir() {
-                let subtree = DirectoryEntry::create(pb, verbose, settings)?;
-                hash_input.extend(subtree.name.as_bytes());
-                hash_input.extend(&subtree.hash_value);
-                subdirs.push(subtree);
             } else {
-                let file = FileEntry::new(pb, verbose, settings)?;
-                hash_input.extend(file.name.as_bytes());
-                hash_input.extend(&file.file_size.to_le_bytes());
-                hash_input.extend(&file.hash_value);
-                files.push(file);
+                let meta = symlink_metadata(&pb)?;
+                let file_type = meta.file_type();
+
+                if file_type.is_symlink() {
+                    if verbose {
+                        println!("Skipping symlink {}", pb.to_string_lossy())
+                    }
+                } else if file_type.is_dir() {
+                    let subtree = DirectoryEntry::create(pb, verbose, settings)?;
+                    hash_input.extend(subtree.name.as_bytes());
+                    hash_input.extend(&subtree.hash_value);
+                    subdirs.push(subtree);
+                } else {
+                    let file = FileEntry::new(pb, &meta, verbose, settings)?;
+                    hash_input.extend(file.name.as_bytes());
+                    hash_input.extend(&file.file_size.to_le_bytes());
+                    hash_input.extend(&file.hash_value);
+                    files.push(file);
+                }
             }
 
             pb.pop();
         }
 
         let hash_value = hash(hash_input.as_slice())?;
-
         if verbose {
             println!("Hashed directory {} into {}", pb.to_string_lossy(), hex::encode(&hash_value))
         }
