@@ -199,7 +199,15 @@ impl DirectoryEntry {
     }
 
     fn create(pb: &mut PathBuf, verbose: bool, settings: &HashSettings) -> Result<DirectoryEntry> {
-        let dir = read_dir(&pb)?;
+        let  dir = {
+            let mut v = Vec::new();
+            for de in read_dir(&pb)? {
+                v.push(de?);
+            }
+            v.sort_by(|l,r|l.file_name().cmp(&r.file_name()));
+            v
+        };
+
         let mut subdirs: Vec<DirectoryEntry> = Vec::new();
         let mut files: Vec<FileEntry> = Vec::new();
         let mut hash_input: Vec<u8> = Vec::new();
@@ -207,8 +215,6 @@ impl DirectoryEntry {
         let name = filename_to_string(pb.file_name());
 
         for entry in dir {
-            let entry = entry?;
-
             pb.push(entry.file_name());
 
             if settings.is_excluded(pb.as_ref()) {
@@ -395,6 +401,9 @@ mod test_tree_hashing {
         file.write_all(b"def")?;
 
         let dir = DirectoryEntry::new(root.path(), false, &test_support::default_settings())?;
+
+        assert_eq!(dir.files[0].hash_value, unhex("cb8379ac2098aa165029e3938a51da0bcecfc008fd6795f401178647f96c5b34"));
+        assert_eq!(dir.subdirs[0].files[0].hash_value, unhex("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"));
 
         assert_eq!(dir.hash_value, unhex("b178872f99aa86b175afb23e34943eb04a40f3ae6940e14b89f2608813135abb"));
 
