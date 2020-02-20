@@ -240,6 +240,7 @@ mod test_named {
         assert_eq!(find_named(&["a", "b", "c", "d"], "c"), Some(&"c"))
     }
 
+    #[test]
     fn find_unsuccessful() {
         assert_eq!(find_named(&["a", "b", "c", "d"], "q"), None)
     }

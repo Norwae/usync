@@ -101,6 +101,20 @@ pub struct HashSettings {
     exclude_patterns: Vec<Pattern>,
 }
 
+#[cfg(test)]
+pub mod test_support {
+    use super::*;
+
+    pub fn default_settings() -> HashSettings {
+        HashSettings {
+            force_rebuild: false,
+            mode: ManifestMode::Hash,
+            exclude_patterns: vec![]
+        }
+    }
+
+}
+
 #[derive(Debug, Clone)]
 pub struct Configuration {
     role: Option<ProcessRole>,

@@ -343,6 +343,97 @@ impl Manifest {
     }
 }
 
+#[cfg(test)]
+mod test_tree_hashing {
+    use super::*;
+    use crate::config::test_support;
+    use ring::test::from_hex;
+    use std::cmp::min;
+    use tempfile::{NamedTempFile, TempDir};
+    use std::io::{Write, Seek, SeekFrom};
+    use filetime::{set_file_mtime, FileTime};
+    use std::fs::create_dir;
+    use std::time::UNIX_EPOCH;
+
+    fn unhex(str: &str) -> [u8;32]{
+        let vec = from_hex(str).unwrap();
+        let mut rv = [0u8;32];
+        rv.copy_from_slice(vec.as_slice());
+        rv
+    }
+
+
+    struct RepeatA(usize);
+    impl Read for RepeatA {
+        fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+            if self.0 == 0 {
+                Ok(0usize)
+            } else {
+                let take = min(self.0, buf.len());
+                self.0 -= take;
+                let buf = &mut buf[..take];
+                for v in buf.iter_mut() {
+                    *v = 'a' as u8;
+                }
+                Ok(take)
+            }
+        }
+    }
+
+    #[test]
+    fn hash_small_subtree() -> Result<()>{
+        let root = TempDir::new()?;
+        let mut cursor = root.path().join(Path::new("subdir"));
+        create_dir(&cursor)?;
+        cursor.push("file1.txt");
+        let mut file = File::create(&cursor)?;
+        file.write_all(b"abc")?;
+        cursor.pop();
+        cursor.pop();
+        cursor.push("file2.txt");
+        file = File::create(&cursor)?;
+        file.write_all(b"def")?;
+
+        let dir = DirectoryEntry::new(root.path(), false, &test_support::default_settings())?;
+
+        assert_eq!("b178872f99aa86b175afb23e34943eb04a40f3ae6940e14b89f2608813135abb", hex::encode(dir.hash_value));
+
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_hash_single_file() -> Result<()>{
+        let mut file = NamedTempFile::new()?;
+        file.write_all(b"abc")?;
+        file.seek(SeekFrom::Start(0))?;
+        file.flush()?;
+        set_file_mtime(file.path(), FileTime::from(UNIX_EPOCH))?;
+        let settings = test_support::default_settings();
+
+        let generated = FileEntry::new(file.path(), &file.as_file().metadata()?, false, &settings)?;
+
+        assert_eq!(filename_to_string(file.path().file_name()), generated.name);
+        assert_eq!(UNIX_EPOCH, generated.modification_time);
+        assert_eq!(3, generated.file_size);
+        assert_eq!(unhex("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"), generated.hash_value);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_vectors() -> Result<()>{
+        let value = hash(&b"abc"[..])?;
+        assert_eq!(value, unhex("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"));
+        let value = hash(&b"abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu"[..])?;
+        assert_eq!(value, unhex("cf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1"));
+        let value = hash(RepeatA(1000000))?;
+        assert_eq!(value, unhex("cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0"));
+
+        Ok(())
+    }
+}
+
 
 fn hash<R: Read>(mut input: R) -> Result<ShaSum> {
     let mut sha256 = Context::new(&SHA256);
