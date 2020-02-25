@@ -183,7 +183,7 @@ fn main_as_controller(cfg: &Configuration) -> Result<(), Error> {
 }
 
 fn main() -> Result<(), Error> {
-    let cfg = config::configure()?;
+    let cfg = Configuration::parse()?;
     match cfg.role() {
         Some(ProcessRole::Sender) =>
             main_as_sender(&cfg, CombineReadWrite::new(stdin(), stdout())),

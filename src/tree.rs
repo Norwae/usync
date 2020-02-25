@@ -37,7 +37,6 @@ impl Named for FileEntry {
 
 impl FileEntry {
     fn new(path: &Path, meta: &Metadata, verbose: bool, settings: &HashSettings) -> Result<FileEntry> {
-
         let hash_value = if settings.manifest_mode() == ManifestMode::Hash {
             hash(File::open(path)?)?
         } else {
@@ -131,13 +130,13 @@ impl DirectoryEntry {
         self.validate0(path, settings).unwrap_or(false)
     }
 
-    fn copy_from<T: Transmitter>(&self, path: &Path, source: &DirectoryEntry, transmitter: &mut T, verbose: bool)-> Result<()> {
+    fn copy_from<T: Transmitter>(&self, path: &Path, source: &DirectoryEntry, transmitter: &mut T, verbose: bool) -> Result<()> {
         self.copy_subdirs(path, &source, transmitter, verbose)?;
         self.copy_files(path, &source, transmitter, verbose)?;
         Ok(())
     }
 
-    fn copy_files<T: Transmitter>(&self, path: &Path, source: &DirectoryEntry, transmitter: &mut T, verbose: bool) -> Result<()>{
+    fn copy_files<T: Transmitter>(&self, path: &Path, source: &DirectoryEntry, transmitter: &mut T, verbose: bool) -> Result<()> {
         for source_file in &source.files {
             let existing_file = find_named(self.files.as_slice(), &source_file.name);
             let this_path = path.join(&source_file.name);
@@ -163,7 +162,7 @@ impl DirectoryEntry {
         Ok(())
     }
 
-    fn copy_subdirs<T: Transmitter>(&self, path: &Path, source: &DirectoryEntry, transmitter: &mut T, verbose: bool) -> Result<()>{
+    fn copy_subdirs<T: Transmitter>(&self, path: &Path, source: &DirectoryEntry, transmitter: &mut T, verbose: bool) -> Result<()> {
         for source_dir in &source.subdirs {
             let existing_subdir = find_named(self.subdirs.as_slice(), &source_dir.name);
             let this_path = path.join(&source_dir.name);
@@ -199,12 +198,12 @@ impl DirectoryEntry {
     }
 
     fn create(pb: &mut PathBuf, verbose: bool, settings: &HashSettings) -> Result<DirectoryEntry> {
-        let  dir = {
+        let dir = {
             let mut v = Vec::new();
             for de in read_dir(&pb)? {
                 v.push(de?);
             }
-            v.sort_by(|l,r|l.file_name().cmp(&r.file_name()));
+            v.sort_by(|l, r| l.file_name().cmp(&r.file_name()));
             v
         };
 
@@ -361,15 +360,16 @@ mod test_tree_hashing {
     use std::fs::create_dir;
     use std::time::UNIX_EPOCH;
 
-    fn unhex(str: &str) -> [u8;32]{
+    fn unhex(str: &str) -> [u8; 32] {
         let vec = from_hex(str).unwrap();
-        let mut rv = [0u8;32];
+        let mut rv = [0u8; 32];
         rv.copy_from_slice(vec.as_slice());
         rv
     }
 
 
     struct RepeatA(usize);
+
     impl Read for RepeatA {
         fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
             if self.0 == 0 {
@@ -387,7 +387,7 @@ mod test_tree_hashing {
     }
 
     #[test]
-    fn hash_small_subtree() -> Result<()>{
+    fn hash_small_subtree() -> Result<()> {
         let root = TempDir::new()?;
         let mut cursor = root.path().join(Path::new("subdir"));
         create_dir(&cursor)?;
@@ -412,7 +412,7 @@ mod test_tree_hashing {
     }
 
     #[test]
-    fn test_hash_single_file() -> Result<()>{
+    fn test_hash_single_file() -> Result<()> {
         let mut file = NamedTempFile::new()?;
         file.write_all(b"abc")?;
         file.seek(SeekFrom::Start(0))?;
@@ -431,7 +431,7 @@ mod test_tree_hashing {
     }
 
     #[test]
-    fn test_vectors() -> Result<()>{
+    fn test_vectors() -> Result<()> {
         let value = hash(&b"abc"[..])?;
         assert_eq!(value, unhex("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"));
         let value = hash(&b"abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu"[..])?;
