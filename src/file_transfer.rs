@@ -14,7 +14,7 @@ use crate::tree::Manifest;
 use std::time::SystemTime;
 
 pub trait FileAccess {
-    type Read : std::io::Read;
+    type Read: std::io::Read;
     fn metadata(&self, path: &Path) -> Result<Metadata>;
     fn read(&self, path: &Path) -> Result<Self::Read>;
 }
@@ -46,14 +46,14 @@ pub trait Transmitter {
 
 pub struct LocalTransmitter<'a> {
     source: &'a Path,
-    target: &'a Path
+    target: &'a Path,
 }
 
 impl LocalTransmitter<'_> {
-    pub fn new<'a> (from: &'a Path, to: &'a Path) -> LocalTransmitter<'a> {
+    pub fn new<'a>(from: &'a Path, to: &'a Path) -> LocalTransmitter<'a> {
         LocalTransmitter {
             source: from,
-            target: to
+            target: to,
         }
     }
 }
@@ -75,7 +75,7 @@ impl Transmitter for LocalTransmitter<'_> {
     }
 }
 
-pub fn read_bincoded<R: Read, C: DeserializeOwned>(input: &mut R) -> Result<C> {
+pub fn read_bincoded<R: Read, C: DeserializeOwned>(input: R) -> Result<C> {
     bincode::deserialize_from(input).map_err(util::convert_error)
 }
 
@@ -84,7 +84,7 @@ pub fn write_bincoded<W: Write, S: Serialize>(output: &mut W, data: &S) -> Resul
     output.write_all(bytes.as_slice())
 }
 
-#[derive(Serialize, Deserialize,Debug,PartialEq,Eq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct PortablePath {
     segments: Vec<String>
 }
@@ -114,7 +114,7 @@ impl PortablePath {
 struct FileAttributes {
     size: u64,
     secs: i64,
-    nanos: u32
+    nanos: u32,
 }
 
 impl FileAttributes {
@@ -123,7 +123,7 @@ impl FileAttributes {
         FileAttributes {
             size,
             secs: time.unix_seconds(),
-            nanos: time.nanoseconds()
+            nanos: time.nanoseconds(),
         }
     }
 
@@ -132,31 +132,30 @@ impl FileAttributes {
     }
 }
 
-pub struct CommandTransmitter<'a,  RW: Read + Write> {
+pub struct CommandTransmitter<'a, RW: Read + Write> {
     root: &'a Path,
-    io: &'a mut RW
+    io: &'a mut RW,
 }
 
 impl<RW: Read + Write> CommandTransmitter<'_, RW> {
     pub fn new<'a>(root: &'a Path, io: &'a mut RW) -> CommandTransmitter<'a, RW> {
         CommandTransmitter {
             root,
-            io
+            io,
         }
     }
 }
 
 
-pub(crate) fn command_handler_loop<RW: Read + Write, A: FileAccess>(root: &Path, manifest: &Manifest, mut io: RW, access: &A) -> Result<()> {
-    let io = &mut io;
+pub(crate) fn command_handler_loop<R: Read, W: Write, A: FileAccess>(root: &Path, manifest: &Manifest, mut input: R, mut output: W, access: &A) -> Result<()> {
     loop {
-        let next = read_bincoded(io)?;
+        let next = read_bincoded(&mut input)?;
         match next {
             Command::End => {
-                return Ok(())
-            },
+                return Ok(());
+            }
             Command::SendManifest => {
-                write_bincoded(io, &manifest)?;
+                write_bincoded(&mut output, &manifest)?;
             }
             Command::SendFile(path) => {
                 let file = path.relative_to(root);
@@ -164,12 +163,12 @@ pub(crate) fn command_handler_loop<RW: Read + Write, A: FileAccess>(root: &Path,
                 let attrs = FileAttributes::new(meta.len(), meta.modified()?);
                 let mut reader = access.read(&file)?;
 
-                write_bincoded( io, &attrs)?;
-                std::io::copy(&mut reader, io)?;
+                write_bincoded(&mut output, &attrs)?;
+                std::io::copy(&mut reader, &mut output)?;
             }
         }
 
-        io.flush()?;
+        output.flush()?;
     }
 }
 
@@ -177,7 +176,7 @@ impl<'a, RW: Read + Write> Transmitter for CommandTransmitter<'a, RW> {
     fn transmit(&mut self, path: &Path) -> Result<()> {
         write_bincoded(self.io, &Command::SendFile(PortablePath::from(path)))?;
 
-        let meta = read_bincoded::<RW, FileAttributes>(self.io)?;
+        let meta: FileAttributes = read_bincoded(&mut self.io)?;
         let path = self.root.join(path);
 
         save_copy(&path, self.io, meta.size)?;

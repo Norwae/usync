@@ -27,7 +27,7 @@ fn main_as_server(cfg: &Configuration) -> Result<(), Error> { // ! would be bett
     server.run()
 }
 
-fn main_as_sender<RW: Read + Write>(cfg: &Configuration, io: RW) -> Result<(), Error> {
+fn main_as_sender<R: Read, W: Write>(cfg: &Configuration, input: R, output: W) -> Result<(), Error> {
     if let PathDefinition::Local(root) = cfg.source() {
         let manifest = Manifest::create_persistent(
             &root,
@@ -35,23 +35,22 @@ fn main_as_sender<RW: Read + Write>(cfg: &Configuration, io: RW) -> Result<(), E
             cfg.hash_settings(),
             cfg.manifest_path())?;
 
-        command_handler_loop(&root, &manifest, io, &DefaultFileAccess)
+        command_handler_loop(&root, &manifest, input, output, &DefaultFileAccess)
     } else {
         non_local_path(cfg.source())
     }
 }
 
 fn main_as_receiver<RW: Read + Write>(cfg: &Configuration, mut io: RW) -> Result<(), Error> {
-    let io = &mut io;
     if let PathDefinition::Local(root) = cfg.target() {
         let local_manifest = Manifest::create_ephemeral(&root, false, cfg.hash_settings())?;
-        write_bincoded(io, &Command::SendManifest)?;
-        let remote_manifest = read_bincoded(io)?;
+        write_bincoded(&mut io, &Command::SendManifest)?;
+        let remote_manifest = read_bincoded(&mut io)?;
 
-        let mut transmitter = CommandTransmitter::new(&root, io);
+        let mut transmitter = CommandTransmitter::new(&root, &mut io);
         local_manifest.copy_from(&remote_manifest, &mut transmitter, cfg.verbose())?;
 
-        write_bincoded(io, &Command::End)
+        write_bincoded(&mut io, &Command::End)
     } else {
         non_local_path(cfg.target())
     }
@@ -81,7 +80,7 @@ fn main_as_local_pipe(cfg: &Configuration) -> Result<(), Error> {
         let output = SendAdapter::new(send_to_receiver);
         let input = ReceiveAdapter::new(receive_from_receiver);
 
-        main_as_sender(&c1, CombineReadWrite::new(input, output)).unwrap_or_else(|e| {
+        main_as_sender(&c1, input, output).unwrap_or_else(|e| {
             eprintln!("Sender failed with: {}", e);
         });
     });
@@ -151,8 +150,8 @@ fn main_as_controller(cfg: &Configuration) -> Result<(), Error> {
         }
         (PathDefinition::Local(_), PathDefinition::Remote(remote, remote_path)) => {
             let proc = spawn_remote_usync(cfg, "receiver", remote, "--target", remote_path)?;
-            let io = CombineReadWrite::new(proc.stdout.unwrap(), proc.stdin.unwrap());
-            main_as_sender(cfg, io)
+
+            main_as_sender(cfg, proc.stdout.unwrap(), proc.stdin.unwrap())
         }
         _ => Err(Error::new(ErrorKind::Other, format!("Unsupported combination of paths: {} vs {}", src, trg)))
     }
@@ -162,7 +161,7 @@ fn main() -> Result<(), Error> {
     let cfg = Configuration::parse()?;
     match cfg.role() {
         Some(ProcessRole::Sender) =>
-            main_as_sender(&cfg, CombineReadWrite::new(stdin(), stdout())),
+            main_as_sender(&cfg, stdin(), stdout()),
         Some(ProcessRole::Receiver) =>
             main_as_receiver(&cfg, CombineReadWrite::new(stdin(), stdout())),
         Some(ProcessRole::Server) =>

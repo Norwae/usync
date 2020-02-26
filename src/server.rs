@@ -33,7 +33,7 @@ impl Server {
                 println!("Accepted connection {}", sa);
             }
             thread::spawn(move || {
-                match command_handler_loop(&root, manifest.as_ref(), conn, registry.as_ref()) {
+                match command_handler_loop(&root, manifest.as_ref(), &conn, &conn, registry.as_ref()) {
                     Ok(_) => if verbose {
                         println!("Finished sending to {}", sa)
                     },
