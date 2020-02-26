@@ -7,7 +7,6 @@ use crate::util;
 use serde::{Serialize, Deserialize};
 use tempfile::NamedTempFile;
 use filetime::{set_file_mtime, FileTime};
-use crate::util::convert_error;
 use serde::de::DeserializeOwned;
 
 use crate::tree::Manifest;
@@ -80,8 +79,12 @@ fn read_bincoded<R: Read, C: DeserializeOwned>(input: R) -> Result<C> {
 }
 
 fn write_bincoded_with_flush<W: Write, S: Serialize>(mut output:  W, data: &S) -> Result<()> {
-    bincode::serialize_into(&mut output, data).map_err(util::convert_error)?;
+    write_bincoded(&mut output, data)?;
     output.flush()
+}
+
+fn write_bincoded<W: Write, S: Serialize>(mut output: &mut W, data: &S) -> Result<()>{
+    bincode::serialize_into(&mut output, data).map_err(util::convert_error)
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -95,7 +98,7 @@ impl PortablePath {
         PortablePath {
             segments: path.into_iter()
                 .map(|os| String::from(os.to_str().unwrap()))
-                .collect::<Vec<String>>()
+                .collect()
         }
     }
 
@@ -179,7 +182,7 @@ pub(crate) fn command_handler_loop<R: Read, W: Write, A: FileAccess>(root: &Path
                 let attrs = FileAttributes::new(meta.len(), meta.modified()?);
                 let mut reader = access.read(&file)?;
 
-                write_bincoded_with_flush(&mut output, &attrs)?;
+                write_bincoded(&mut output, &attrs)?;
                 std::io::copy(&mut reader, &mut output)?;
             }
         }
@@ -195,14 +198,14 @@ impl<R: Read, W: Write> Transmitter for CommandTransmitter<R, W> {
         let meta: FileAttributes = read_bincoded(&mut self.input)?;
         let path = self.root.join(path);
 
-        save_copy(&path, &mut self.input, meta.size)?;
+        save_file_with_tempfile(&path, &mut self.input, meta.size)?;
         set_file_mtime(&path, meta.to_file_time())?;
 
         Ok(())
     }
 }
 
-fn save_copy<R: Read>(target: &Path, reader: &mut R, size: u64) -> Result<()> {
+fn save_file_with_tempfile<R: Read>(target: &Path, reader: &mut R, size: u64) -> Result<()> {
     let parent = target.parent().unwrap();
     if !parent.exists() {
         create_dir_all(parent)?;
@@ -213,6 +216,6 @@ fn save_copy<R: Read>(target: &Path, reader: &mut R, size: u64) -> Result<()> {
 
     std::io::copy(&mut reader, stage_file.as_file_mut())?;
 
-    stage_file.persist(target).map_err(convert_error)?;
+    stage_file.persist(target).map_err(|it|it.error)?;
     Ok(())
 }
