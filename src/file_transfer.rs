@@ -34,7 +34,7 @@ impl FileAccess for DefaultFileAccess {
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Command {
+enum Command {
     End,
     SendManifest,
     SendFile(PortablePath),
@@ -75,11 +75,11 @@ impl Transmitter for LocalTransmitter<'_> {
     }
 }
 
-pub fn read_bincoded<R: Read, C: DeserializeOwned>(input: R) -> Result<C> {
+fn read_bincoded<R: Read, C: DeserializeOwned>(input: R) -> Result<C> {
     bincode::deserialize_from(input).map_err(util::convert_error)
 }
 
-pub fn write_bincoded<W: Write, S: Serialize>(output: &mut W, data: &S) -> Result<()> {
+fn write_bincoded<W: Write, S: Serialize>(output: &mut W, data: &S) -> Result<()> {
     let bytes = bincode::serialize(data).map_err(util::convert_error)?;
     output.write_all(bytes.as_slice())
 }
@@ -132,17 +132,31 @@ impl FileAttributes {
     }
 }
 
-pub struct CommandTransmitter<'a, RW: Read + Write> {
-    root: &'a Path,
-    io: &'a mut RW,
+pub struct CommandTransmitter<R: Read, W: Write> {
+    root: PathBuf,
+    input: R,
+    output: W
 }
 
-impl<RW: Read + Write> CommandTransmitter<'_, RW> {
-    pub fn new<'a>(root: &'a Path, io: &'a mut RW) -> CommandTransmitter<'a, RW> {
+impl<R: Read, W: Write> CommandTransmitter<R, W> {
+    pub fn new(root: &Path, input: R, output: W) -> CommandTransmitter<R, W> {
         CommandTransmitter {
-            root,
-            io,
+            root: root.to_owned(),
+            input,
+            output
         }
+    }
+
+    pub fn remote_manifest(&mut self) -> Result<Manifest> {
+        write_bincoded(&mut self.output, &Command::SendManifest)?;
+        read_bincoded(&mut self.input)
+    }
+}
+
+impl <R: Read, W: Write> Drop for CommandTransmitter<R, W> {
+    fn drop(&mut self) {
+        // if we can't politely send an end, well... tough
+        let _ = write_bincoded(&mut self.output, &Command::End);
     }
 }
 
@@ -172,14 +186,14 @@ pub(crate) fn command_handler_loop<R: Read, W: Write, A: FileAccess>(root: &Path
     }
 }
 
-impl<'a, RW: Read + Write> Transmitter for CommandTransmitter<'a, RW> {
+impl<R: Read, W: Write> Transmitter for CommandTransmitter<R, W> {
     fn transmit(&mut self, path: &Path) -> Result<()> {
-        write_bincoded(self.io, &Command::SendFile(PortablePath::from(path)))?;
+        write_bincoded(&mut self.output, &Command::SendFile(PortablePath::from(path)))?;
 
-        let meta: FileAttributes = read_bincoded(&mut self.io)?;
+        let meta: FileAttributes = read_bincoded(&mut self.input)?;
         let path = self.root.join(path);
 
-        save_copy(&path, self.io, meta.size)?;
+        save_copy(&path, &mut self.input, meta.size)?;
         set_file_mtime(&path, meta.to_file_time())?;
 
         Ok(())

@@ -41,16 +41,12 @@ fn main_as_sender<R: Read, W: Write>(cfg: &Configuration, input: R, output: W) -
     }
 }
 
-fn main_as_receiver<RW: Read + Write>(cfg: &Configuration, mut io: RW) -> Result<(), Error> {
+fn main_as_receiver<R: Read, W: Write>(cfg: &Configuration, input: R, output: W) -> Result<(), Error> {
     if let PathDefinition::Local(root) = cfg.target() {
+        let mut transmitter = CommandTransmitter::new(&root, input, output);
         let local_manifest = Manifest::create_ephemeral(&root, false, cfg.hash_settings())?;
-        write_bincoded(&mut io, &Command::SendManifest)?;
-        let remote_manifest = read_bincoded(&mut io)?;
-
-        let mut transmitter = CommandTransmitter::new(&root, &mut io);
-        local_manifest.copy_from(&remote_manifest, &mut transmitter, cfg.verbose())?;
-
-        write_bincoded(&mut io, &Command::End)
+        let remote_manifest = transmitter.remote_manifest()?;
+        local_manifest.copy_from(&remote_manifest, &mut transmitter, cfg.verbose())
     } else {
         non_local_path(cfg.target())
     }
@@ -88,7 +84,7 @@ fn main_as_local_pipe(cfg: &Configuration) -> Result<(), Error> {
         let output = SendAdapter::new(send_to_sender);
         let input = ReceiveAdapter::new(receive_from_sender);
 
-        main_as_receiver(&c2, CombineReadWrite::new(input, output)).unwrap_or_else(|e| {
+        main_as_receiver(&c2, input, output).unwrap_or_else(|e| {
             eprintln!("Receive failed: {}", e)
         });
     });
@@ -141,12 +137,11 @@ fn main_as_controller(cfg: &Configuration) -> Result<(), Error> {
         },
         (PathDefinition::Server(remote), PathDefinition::Local(_)) => {
             let stream = TcpStream::connect(remote)?;
-            main_as_receiver(cfg, stream)
+            main_as_receiver(cfg, &stream, &stream)
         }
         (PathDefinition::Remote(remote, remote_path), PathDefinition::Local(_)) => {
             let proc = spawn_remote_usync(cfg, "sender", remote, "--source", remote_path)?;
-            let io = CombineReadWrite::new(proc.stdout.unwrap(), proc.stdin.unwrap());
-            main_as_receiver(cfg, io)
+            main_as_receiver(cfg, proc.stdout.unwrap(), proc.stdin.unwrap())
         }
         (PathDefinition::Local(_), PathDefinition::Remote(remote, remote_path)) => {
             let proc = spawn_remote_usync(cfg, "receiver", remote, "--target", remote_path)?;
@@ -163,7 +158,7 @@ fn main() -> Result<(), Error> {
         Some(ProcessRole::Sender) =>
             main_as_sender(&cfg, stdin(), stdout()),
         Some(ProcessRole::Receiver) =>
-            main_as_receiver(&cfg, CombineReadWrite::new(stdin(), stdout())),
+            main_as_receiver(&cfg, stdin(), stdout()),
         Some(ProcessRole::Server) =>
             main_as_server(&cfg),
         _ =>
