@@ -57,21 +57,27 @@ impl Server {
     }
 }
 
-struct CachedFileEntry(Mmap, Metadata);
+struct CachedFileEntry {
+    mapping: Mmap,
+    metadata: Metadata
+}
 
 struct CachedFileRegistry {
     inner: Mutex<HashMap<PathBuf, Arc<CachedFileEntry>>>
 }
 
-struct ReadAdapter(Arc<CachedFileEntry>, usize);
+struct ReadAdapter {
+    entry: Arc<CachedFileEntry>,
+    size: usize
+}
 
 impl Read for ReadAdapter {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        let mapping = self.0.as_ref().0.as_ref();
-        let mapping = &mapping[(self.1)..];
+        let mapping = self.entry.as_ref().mapping.as_ref();
+        let mapping = &mapping[(self.size)..];
         let len = min(buf.len(), mapping.len());
         buf[..len].copy_from_slice(&mapping[..len]);
-        self.1 += len;
+        self.size += len;
         Ok(len)
     }
 }
@@ -82,11 +88,11 @@ impl FileAccess for CachedFileRegistry {
     fn metadata(&self, path: &Path) -> Result<Metadata> {
         let mut inner = self.inner.lock().unwrap();
         match inner.get(path) {
-            Some(v) => Ok(v.1.clone()),
+            Some(v) => Ok(v.metadata.clone()),
             None => {
                 let arc = Arc::new(CachedFileRegistry::new_entry(path)?);
                 inner.insert(path.to_owned(), arc.clone());
-                Ok(arc.1.clone())
+                Ok(arc.metadata.clone())
             }
         }
     }
@@ -94,11 +100,17 @@ impl FileAccess for CachedFileRegistry {
     fn read(&self, path: &Path) -> Result<Self::Read> {
         let mut inner = self.inner.lock().unwrap();
         match inner.get(path) {
-            Some(v) => Ok(ReadAdapter(v.clone(), 0)),
+            Some(v) => Ok(ReadAdapter {
+                entry: v.clone(),
+                size: 0
+            }),
             None => {
                 let arc = Arc::new(CachedFileRegistry::new_entry(path)?);
                 inner.insert(path.to_owned(), arc.clone());
-                Ok(ReadAdapter(arc, 0))
+                Ok(ReadAdapter {
+                    entry: arc,
+                    size: 0
+                })
             }
         }
     }
@@ -115,6 +127,9 @@ impl CachedFileRegistry {
         let file = File::open(path)?;
         let map = unsafe { memmap::Mmap::map(&file)? };
         let meta = file.metadata()?;
-        Ok(CachedFileEntry(map, meta))
+        Ok(CachedFileEntry {
+            mapping: map,
+            metadata: meta
+        })
     }
 }
