@@ -35,7 +35,7 @@ fn main_as_sender<R: Read, W: Write>(cfg: &Configuration, input: R, output: W) -
             cfg.hash_settings(),
             cfg.manifest_path())?;
 
-        command_handler_loop(&root, &manifest, input, output, &DefaultFileAccess)
+        remote::command_handler_loop(&root, &manifest, input, output, &DefaultFileAccess)
     } else {
         non_local_path(cfg.source())
     }
@@ -43,7 +43,7 @@ fn main_as_sender<R: Read, W: Write>(cfg: &Configuration, input: R, output: W) -
 
 fn main_as_receiver<R: Read, W: Write>(cfg: &Configuration, input: R, output: W) -> Result<(), Error> {
     if let PathDefinition::Local(root) = cfg.target() {
-        let mut transmitter = CommandTransmitter::new(&root, input, output);
+        let mut transmitter = remote::CommandTransmitter::new(&root, input, output);
         let local_manifest = Manifest::create_ephemeral(&root, false, cfg.hash_settings())?;
         let remote_manifest = transmitter.remote_manifest()?;
         local_manifest.copy_from(&remote_manifest, &mut transmitter, cfg.verbose())
@@ -57,7 +57,7 @@ fn main_as_local(cfg: &Configuration) -> Result<(), Error> {
         if let PathDefinition::Local(from) = cfg.source() {
             let target = Manifest::create_ephemeral(&to, cfg.verbose(), cfg.hash_settings())?;
             let src = Manifest::create_persistent(&from, cfg.verbose(), cfg.hash_settings(), cfg.manifest_path())?;
-            target.copy_from(&src, &mut LocalTransmitter::new(&from, &to), cfg.verbose())
+            target.copy_from(&src, &mut local::LocalTransmitter::new(&from, &to), cfg.verbose())
         } else {
             non_local_path(cfg.source())
         }

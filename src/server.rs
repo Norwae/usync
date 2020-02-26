@@ -1,4 +1,4 @@
-use crate::file_transfer::{FileAccess, command_handler_loop};
+use crate::file_transfer::{FileAccess, remote};
 use std::path::{Path, PathBuf};
 use std::fs::{Metadata, File};
 use std::io::{Result, Read, Error, ErrorKind};
@@ -33,7 +33,7 @@ impl Server {
                 println!("Accepted connection {}", sa);
             }
             thread::spawn(move || {
-                match command_handler_loop(&root, manifest.as_ref(), &conn, &conn, registry.as_ref()) {
+                match remote::command_handler_loop(&root, manifest.as_ref(), &conn, &conn, registry.as_ref()) {
                     Ok(_) => if verbose {
                         println!("Finished sending to {}", sa)
                     },

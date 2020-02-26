@@ -1,18 +1,16 @@
-use std::path::{Path, PathBuf};
-use std::io::{Result, Write, Read, BufReader, BufWriter};
-use std::fs::{create_dir_all, File, Metadata};
-
-use crate::util;
-
-use serde::{Serialize, Deserialize};
-use tempfile::NamedTempFile;
-use filetime::{set_file_mtime, FileTime};
+use std::io::{Read, Result, Write, BufReader, BufWriter};
 use serde::de::DeserializeOwned;
-
-use crate::tree::Manifest;
+use crate::util::convert_error;
+use serde::{Serialize, Deserialize};
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
+use filetime::{FileTime, set_file_mtime};
+use crate::tree::Manifest;
 
 use lazy_static::lazy_static;
+
+use super::*;
+use tempfile::NamedTempFile;
 
 lazy_static! {
     // defines a bincode configuration that allows a maximum object size of 64 megabytes, in LE
@@ -20,11 +18,9 @@ lazy_static! {
     static ref CONFIG: bincode::Config = bincode::config().limit(1 << 26).little_endian().clone();
 }
 
-
-
 fn read_bincoded<R: Read, C: DeserializeOwned>(input: R) -> Result<C> {
     let cfg: &bincode::Config = &*CONFIG;
-    cfg.deserialize_from(input).map_err(util::convert_error)
+    cfg.deserialize_from(input).map_err(convert_error)
 }
 
 fn write_bincoded_with_flush<W: Write, S: Serialize>(mut output:  W, data: &S) -> Result<()> {
@@ -34,28 +30,7 @@ fn write_bincoded_with_flush<W: Write, S: Serialize>(mut output:  W, data: &S) -
 
 fn write_bincoded<W: Write, S: Serialize>(mut output: &mut W, data: &S) -> Result<()>{
     let cfg = &*CONFIG;
-    cfg.serialize_into(&mut output, data).map_err(util::convert_error)
-}
-
-
-pub trait FileAccess {
-    type Read: std::io::Read;
-    fn metadata(&self, path: &Path) -> Result<Metadata>;
-    fn read(&self, path: &Path) -> Result<Self::Read>;
-}
-
-pub struct DefaultFileAccess;
-
-impl FileAccess for DefaultFileAccess {
-    type Read = File;
-
-    fn metadata(&self, path: &Path) -> Result<Metadata> {
-        path.metadata()
-    }
-
-    fn read(&self, path: &Path) -> Result<Self::Read> {
-        File::open(path)
-    }
+    cfg.serialize_into(&mut output, data).map_err(convert_error)
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,40 +40,6 @@ enum Command {
     SendFile(PortablePath),
 }
 
-pub trait Transmitter {
-    fn transmit(&mut self, path: &Path) -> Result<()>;
-}
-
-pub struct LocalTransmitter<'a> {
-    source: &'a Path,
-    target: &'a Path,
-}
-
-impl LocalTransmitter<'_> {
-    pub fn new<'a>(from: &'a Path, to: &'a Path) -> LocalTransmitter<'a> {
-        LocalTransmitter {
-            source: from,
-            target: to,
-        }
-    }
-}
-
-impl Transmitter for LocalTransmitter<'_> {
-    fn transmit(&mut self, path: &Path) -> Result<()> {
-        let source = self.source.join(path);
-        let target = self.target.join(path);
-        let parent = target.parent().unwrap();
-
-        if !parent.exists() {
-            create_dir_all(parent)?;
-        }
-
-        std::fs::copy(&source, &target)?;
-        let time = source.metadata()?.modified()?;
-        set_file_mtime(&target, FileTime::from(time))?;
-        Ok(())
-    }
-}
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 pub struct PortablePath {
