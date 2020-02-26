@@ -9,9 +9,11 @@ use std::thread;
 
 use crate::config::{Configuration, PathDefinition, ProcessRole};
 use crate::file_transfer::*;
+use crate::server::Server;
 use crate::tree::Manifest;
 use crate::util::*;
 
+mod server;
 mod config;
 mod tree;
 mod util;
@@ -23,32 +25,8 @@ fn non_local_path<A>(path: &PathDefinition) -> Result<A, Error> {
 }
 
 fn main_as_server(cfg: &Configuration) -> Result<(), Error> { // ! would be better, but hey...
-    if let PathDefinition::Local(root) = cfg.source() {
-        let manifest = Manifest::create_persistent(root, cfg.verbose(), cfg.hash_settings(), cfg.manifest_path())?;
-        let manifest = Arc::new(manifest);
-        let server_port = TcpListener::bind(format!("0.0.0.0:{}", cfg.server_port()))?;
-
-        loop {
-            let verbose = cfg.verbose();
-            let (conn, sa) = server_port.accept()?;
-            let manifest = manifest.clone();
-            let root = PathBuf::from(root);
-            if verbose {
-                println!("Accepted connection {}", sa);
-            }
-            thread::spawn(move || {
-                match command_handler_loop(&root, &manifest, conn) {
-                    Ok(_) => if verbose {
-                        println!("Finished sending to {}", sa)
-                    },
-                    Err(err) => eprintln!("Command loop failed for {} with {}", sa, err),
-                }
-            });
-        }
-    } else {
-        non_local_path(cfg.source())
-    }
-
+    let server = Server::new(cfg)?;
+    server.run()
 }
 
 fn main_as_sender<RW: Read + Write>(cfg: &Configuration, io: RW) -> Result<(), Error> {
@@ -59,7 +37,7 @@ fn main_as_sender<RW: Read + Write>(cfg: &Configuration, io: RW) -> Result<(), E
             cfg.hash_settings(),
             cfg.manifest_path())?;
 
-        command_handler_loop(&root, &manifest, io)
+        command_handler_loop(&root, &manifest, io, &DefaultFileAccess)
     } else {
         non_local_path(cfg.source())
     }

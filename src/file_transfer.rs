@@ -1,18 +1,37 @@
 use std::path::{Path, PathBuf};
 use std::io::{Result, Write, Read};
-use std::fs::{create_dir_all, File};
+use std::fs::{create_dir_all, File, Metadata};
 
 use crate::util;
 
 use serde::{Serialize, Deserialize};
 use tempfile::NamedTempFile;
 use filetime::{set_file_mtime, FileTime};
-use std::cmp::min;
 use crate::util::convert_error;
 use serde::de::DeserializeOwned;
 
 use crate::tree::Manifest;
 use std::time::SystemTime;
+
+pub trait FileAccess {
+    type Read : std::io::Read;
+    fn metadata(&self, path: &Path) -> Result<Metadata>;
+    fn read(&self, path: &Path) -> Result<Self::Read>;
+}
+
+pub struct DefaultFileAccess;
+
+impl FileAccess for DefaultFileAccess {
+    type Read = File;
+
+    fn metadata(&self, path: &Path) -> Result<Metadata> {
+        path.metadata()
+    }
+
+    fn read(&self, path: &Path) -> Result<Self::Read> {
+        File::open(path)
+    }
+}
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Command {
@@ -127,7 +146,7 @@ impl<RW: Read + Write> CommandTransmitter<'_, RW> {
 }
 
 
-pub(crate) fn command_handler_loop<RW: Read + Write>(root: &Path, manifest: &Manifest, mut io: RW) -> Result<()> {
+pub(crate) fn command_handler_loop<RW: Read + Write, A: FileAccess>(root: &Path, manifest: &Manifest, mut io: RW, access: &A) -> Result<()> {
     let io = &mut io;
     loop {
         let next = read_bincoded(io)?;
@@ -140,12 +159,12 @@ pub(crate) fn command_handler_loop<RW: Read + Write>(root: &Path, manifest: &Man
             }
             Command::SendFile(path) => {
                 let file = path.relative_to(root);
-                let meta = file.metadata()?;
+                let meta = access.metadata(&file)?;
                 let attrs = FileAttributes::new(meta.len(), meta.modified()?);
-                let mut file = File::open(file)?;
+                let mut reader = access.read(&file)?;
 
                 write_bincoded( io, &attrs)?;
-                std::io::copy(&mut file, io)?;
+                std::io::copy(&mut reader, io)?;
             }
         }
 

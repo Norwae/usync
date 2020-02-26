@@ -13,6 +13,7 @@ ring = "0.16.9"         # Hashing
 hex = "0.4.0"           # Hex codec
 serde = {version = "1.0.104", features = ["derive"]}
                         # persistence of manifests
+memmap = "0.7.0"        # cached mmaps for server
 bincode = "1.2.1"       # binary codec for serde
 glob = "0.3.0"          # glob-matching for exclude
 filetime = "0.2"        # update timestamps
