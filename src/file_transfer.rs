@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::io::{Result, Write, Read};
+use std::io::{Result, Write, Read, BufReader, BufWriter};
 use std::fs::{create_dir_all, File, Metadata};
 
 use crate::util;
@@ -79,9 +79,9 @@ fn read_bincoded<R: Read, C: DeserializeOwned>(input: R) -> Result<C> {
     bincode::deserialize_from(input).map_err(util::convert_error)
 }
 
-fn write_bincoded<W: Write, S: Serialize>(output: &mut W, data: &S) -> Result<()> {
-    let bytes = bincode::serialize(data).map_err(util::convert_error)?;
-    output.write_all(bytes.as_slice())
+fn write_bincoded_with_flush<W: Write, S: Serialize>(mut output:  W, data: &S) -> Result<()> {
+    bincode::serialize_into(&mut output, data).map_err(util::convert_error)?;
+    output.flush()
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
@@ -134,21 +134,21 @@ impl FileAttributes {
 
 pub struct CommandTransmitter<R: Read, W: Write> {
     root: PathBuf,
-    input: R,
-    output: W
+    input: BufReader<R>,
+    output: BufWriter<W>
 }
 
 impl<R: Read, W: Write> CommandTransmitter<R, W> {
     pub fn new(root: &Path, input: R, output: W) -> CommandTransmitter<R, W> {
         CommandTransmitter {
             root: root.to_owned(),
-            input,
-            output
+            input: BufReader::new(input),
+            output: BufWriter::new(output)
         }
     }
 
     pub fn remote_manifest(&mut self) -> Result<Manifest> {
-        write_bincoded(&mut self.output, &Command::SendManifest)?;
+        write_bincoded_with_flush(&mut self.output, &Command::SendManifest)?;
         read_bincoded(&mut self.input)
     }
 }
@@ -156,12 +156,14 @@ impl<R: Read, W: Write> CommandTransmitter<R, W> {
 impl <R: Read, W: Write> Drop for CommandTransmitter<R, W> {
     fn drop(&mut self) {
         // if we can't politely send an end, well... tough
-        let _ = write_bincoded(&mut self.output, &Command::End);
+        let _ = write_bincoded_with_flush(&mut self.output, &Command::End);
     }
 }
 
 
-pub(crate) fn command_handler_loop<R: Read, W: Write, A: FileAccess>(root: &Path, manifest: &Manifest, mut input: R, mut output: W, access: &A) -> Result<()> {
+pub(crate) fn command_handler_loop<R: Read, W: Write, A: FileAccess>(root: &Path, manifest: &Manifest, input: R, output: W, access: &A) -> Result<()> {
+    let mut input = BufReader::new(input);
+    let mut output = BufWriter::new(output);
     loop {
         let next = read_bincoded(&mut input)?;
         match next {
@@ -169,7 +171,7 @@ pub(crate) fn command_handler_loop<R: Read, W: Write, A: FileAccess>(root: &Path
                 return Ok(());
             }
             Command::SendManifest => {
-                write_bincoded(&mut output, &manifest)?;
+                write_bincoded_with_flush(&mut output, &manifest)?;
             }
             Command::SendFile(path) => {
                 let file = path.relative_to(root);
@@ -177,7 +179,7 @@ pub(crate) fn command_handler_loop<R: Read, W: Write, A: FileAccess>(root: &Path
                 let attrs = FileAttributes::new(meta.len(), meta.modified()?);
                 let mut reader = access.read(&file)?;
 
-                write_bincoded(&mut output, &attrs)?;
+                write_bincoded_with_flush(&mut output, &attrs)?;
                 std::io::copy(&mut reader, &mut output)?;
             }
         }
@@ -188,7 +190,7 @@ pub(crate) fn command_handler_loop<R: Read, W: Write, A: FileAccess>(root: &Path
 
 impl<R: Read, W: Write> Transmitter for CommandTransmitter<R, W> {
     fn transmit(&mut self, path: &Path) -> Result<()> {
-        write_bincoded(&mut self.output, &Command::SendFile(PortablePath::from(path)))?;
+        write_bincoded_with_flush(&mut self.output, &Command::SendFile(PortablePath::from(path)))?;
 
         let meta: FileAttributes = read_bincoded(&mut self.input)?;
         let path = self.root.join(path);
@@ -199,7 +201,6 @@ impl<R: Read, W: Write> Transmitter for CommandTransmitter<R, W> {
         Ok(())
     }
 }
-
 
 fn save_copy<R: Read>(target: &Path, reader: &mut R, size: u64) -> Result<()> {
     let parent = target.parent().unwrap();
