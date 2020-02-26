@@ -80,7 +80,8 @@ pub fn read_bincoded<R: Read, C: DeserializeOwned>(input: &mut R) -> Result<C> {
 }
 
 pub fn write_bincoded<W: Write, S: Serialize>(output: &mut W, data: &S) -> Result<()> {
-    bincode::serialize_into(output, data).map_err(util::convert_error)
+    let bytes = bincode::serialize(data).map_err(util::convert_error)?;
+    output.write_all(bytes.as_slice())
 }
 
 #[derive(Serialize, Deserialize,Debug,PartialEq,Eq)]

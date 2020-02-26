@@ -1,9 +1,7 @@
 use std::io::{Error, ErrorKind, Read, stdin, stdout, Write};
-use std::net::{TcpListener, TcpStream};
-use std::path::PathBuf;
+use std::net::TcpStream;
 use std::process;
 use std::process::Stdio;
-use std::sync::Arc;
 use std::sync::mpsc::channel;
 use std::thread;
 

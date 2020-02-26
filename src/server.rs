@@ -98,7 +98,7 @@ impl FileAccess for CachedFileRegistry {
             None => {
                 let arc = Arc::new(CachedFileRegistry::new_entry(path)?);
                 inner.insert(path.to_owned(), arc.clone());
-                Ok(ReadAdapter(arc.clone(), 0))
+                Ok(ReadAdapter(arc, 0))
             }
         }
     }
