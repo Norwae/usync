@@ -91,15 +91,17 @@ impl PortablePath {
 }
 
 #[derive(Deserialize, Serialize)]
-struct PortableTime {
+struct FileAttributes {
+    size: u64,
     secs: i64,
     nanos: u32
 }
 
-impl PortableTime {
-    fn new(time: SystemTime) -> PortableTime {
+impl FileAttributes {
+    fn new(size: u64, time: SystemTime) -> FileAttributes {
         let time = FileTime::from(time);
-        PortableTime {
+        FileAttributes {
+            size,
             secs: time.unix_seconds(),
             nanos: time.nanoseconds()
         }
@@ -107,25 +109,6 @@ impl PortableTime {
 
     fn to_file_time(&self) -> FileTime {
         FileTime::from_unix_time(self.secs, self.nanos)
-    }
-}
-
-struct LimitRead<'a, A: Read> {
-    reader: &'a mut A,
-    limit: usize,
-}
-
-impl<A: Read> Read for LimitRead<'_, A> {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
-        let m = min(self.limit, buf.len());
-        Ok(if m == 0 {
-            0usize
-        } else {
-            let b2 = &mut buf[..m];
-            let got = self.reader.read(b2)?;
-            self.limit -= got;
-            got as usize
-        })
     }
 }
 
@@ -158,11 +141,10 @@ pub(crate) fn command_handler_loop<RW: Read + Write>(root: &Path, manifest: &Man
             Command::SendFile(path) => {
                 let file = path.relative_to(root);
                 let meta = file.metadata()?;
-                let size = meta.len();
-                let mtime = PortableTime::new(meta.modified()?);
+                let attrs = FileAttributes::new(meta.len(), meta.modified()?);
                 let mut file = File::open(file)?;
-                write_bincoded( io, &mtime)?;
-                write_bincoded( io, &size)?;
+
+                write_bincoded( io, &attrs)?;
                 std::io::copy(&mut file, io)?;
             }
         }
@@ -175,12 +157,11 @@ impl<'a, RW: Read + Write> Transmitter for CommandTransmitter<'a, RW> {
     fn transmit(&mut self, path: &Path) -> Result<()> {
         write_bincoded(self.io, &Command::SendFile(PortablePath::from(path)))?;
 
-        let time = read_bincoded::<RW, PortableTime>(self.io)?.to_file_time();
-        let size = read_bincoded(self.io)?;
-
+        let meta = read_bincoded::<RW, FileAttributes>(self.io)?;
         let path = self.root.join(path);
-        save_copy(&path, self.io, size)?;
-        set_file_mtime(&path, time)?;
+
+        save_copy(&path, self.io, meta.size)?;
+        set_file_mtime(&path, meta.to_file_time())?;
 
         Ok(())
     }
@@ -194,7 +175,7 @@ fn save_copy<R: Read>(target: &Path, reader: &mut R, size: u64) -> Result<()> {
     }
 
     let mut stage_file = NamedTempFile::new_in(parent)?;
-    let mut reader = LimitRead { reader, limit: size as usize };
+    let mut reader = reader.take(size);
 
     std::io::copy(&mut reader, stage_file.as_file_mut())?;
 
