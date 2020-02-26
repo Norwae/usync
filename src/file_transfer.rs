@@ -12,6 +12,32 @@ use serde::de::DeserializeOwned;
 use crate::tree::Manifest;
 use std::time::SystemTime;
 
+use lazy_static::lazy_static;
+
+lazy_static! {
+    // defines a bincode configuration that allows a maximum object size of 64 megabytes, in LE
+    // encoding. If larger manifests eventually become a thing, we need to reconsider this.
+    static ref CONFIG: bincode::Config = bincode::config().limit(1 << 26).little_endian().clone();
+}
+
+
+
+fn read_bincoded<R: Read, C: DeserializeOwned>(input: R) -> Result<C> {
+    let cfg: &bincode::Config = &*CONFIG;
+    cfg.deserialize_from(input).map_err(util::convert_error)
+}
+
+fn write_bincoded_with_flush<W: Write, S: Serialize>(mut output:  W, data: &S) -> Result<()> {
+    write_bincoded(&mut output, data)?;
+    output.flush()
+}
+
+fn write_bincoded<W: Write, S: Serialize>(mut output: &mut W, data: &S) -> Result<()>{
+    let cfg = &*CONFIG;
+    cfg.serialize_into(&mut output, data).map_err(util::convert_error)
+}
+
+
 pub trait FileAccess {
     type Read: std::io::Read;
     fn metadata(&self, path: &Path) -> Result<Metadata>;
@@ -72,19 +98,6 @@ impl Transmitter for LocalTransmitter<'_> {
         set_file_mtime(&target, FileTime::from(time))?;
         Ok(())
     }
-}
-
-fn read_bincoded<R: Read, C: DeserializeOwned>(input: R) -> Result<C> {
-    bincode::deserialize_from(input).map_err(util::convert_error)
-}
-
-fn write_bincoded_with_flush<W: Write, S: Serialize>(mut output:  W, data: &S) -> Result<()> {
-    write_bincoded(&mut output, data)?;
-    output.flush()
-}
-
-fn write_bincoded<W: Write, S: Serialize>(mut output: &mut W, data: &S) -> Result<()>{
-    bincode::serialize_into(&mut output, data).map_err(util::convert_error)
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
